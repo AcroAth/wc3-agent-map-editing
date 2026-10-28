@@ -338,6 +338,9 @@ def run_proxy(fallback) -> None:
         print(f"[wc3-tester] shared server unavailable ({exc}); running a private one", file=sys.stderr)
         fallback()
         return
+    # Each forwarded call would otherwise log ~6 HTTP/session lines to stderr.
+    for name in ("httpx", "httpcore", "mcp"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     asyncio.run(_proxy_main())
 
 
