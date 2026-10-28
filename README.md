@@ -1,0 +1,144 @@
+# wc3-tester
+
+A Codex plugin with an MCP (stdio) server that lets an agent control
+**Warcraft III** for automated map testing: classic 1.26–1.31 (`war3.exe`) and
+Reforged 1.32+ (`Warcraft III.exe` under `_retail_\x86_64\`). The game can run
+in the background, unfocused and covered by other windows.
+
+## Install
+
+Requires Windows 10/11 and Python 3.11+ (`py` launcher or `python` on PATH).
+
+```bat
+codex plugin marketplace add AcroAth/wc3-tester
+codex plugin add wc3-tester@wc3-tester
+```
+
+To work on a local clone instead, pass its folder:
+`codex plugin marketplace add C:\path\to\wc3-tester`.
+
+Start a new Codex chat after installing or updating. A running chat keeps the
+server it started with.
+
+The first launch runs `scripts\run_server.cmd`. It creates a venv in
+`%LOCALAPPDATA%\wc3-tester\venv` (override with `WC3_TESTER_VENV`), which stays
+outside the plugin folder because deep plugin-cache paths break pip on systems
+without long-path support. It then installs `requirements.txt` (`mcp<2`, Pillow,
+psutil, minidump). Delete the `.wc3-tester-deps-v2` marker in the venv to force
+a reinstall. Nothing is written to stdout before the MCP server starts, so the
+stdio channel stays clean.
+
+Point the server at your game if it is not in a default location:
+
+```bat
+setx WC3_EXE "C:\Program Files (x86)\Warcraft III\_retail_\x86_64\Warcraft III.exe"
+```
+
+Optional, for better diagnostics:
+
+- `%LOCALAPPDATA%\wc3-tester\venv\Scripts\pip install windows-capture`: a
+  Windows Graphics Capture fallback for windows that return black frames from
+  PrintWindow.
+- Windows SDK **Debugging Tools for Windows**: provides `cdb.exe`, which is used
+  automatically for deeper dump analysis (`!analyze -v`). Without it, dumps are
+  parsed with the bundled pure-Python `minidump` package.
+
+Environment variables (all optional):
+
+| Variable | Meaning |
+| --- | --- |
+| `WC3_EXE` | Path to the game executable |
+| `WC3_INPUT_MODE` | Default `background` or `foreground` |
+| `WC3_INPUT_DELAY_MS` | Delay between posted messages (default 30) |
+| `WC3_ERRORS_DIRS` | Extra `;`-separated error/log directories |
+| `WC3_TESTER_OUT` | Root for session folders (screenshots, runs) |
+| `WC3_TESTER_VENV` | Where the launcher keeps its venv |
+| `WC3_SYMPATH` | Symbol path for `cdb` (enables `srv*<path>*`) |
+| `WC3_VIRTUAL_CURSOR` | `0` disables the virtual cursor for classic WC3 |
+| `WC3_FRAME_MS` | Wait after moving the virtual cursor (default 50) |
+
+Session output defaults to `%LOCALAPPDATA%\wc3-tester\runs\<timestamp>\`.
+
+## Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `wc3_launch(map_path, exe, windowed, nowfpause, extra_args, flavor)` | Start the game (and optionally load a map), wait for its window |
+| `wc3_attach(pid, title)` | Attach to a running game |
+| `wc3_status()` | State, exit code, hung, uptime, CPU/RAM, fatal dialog |
+| `wc3_kill()` | Terminate the process tree |
+| `wc3_screenshot(method, max_width, restore_minimized)` | Client-area screenshot + metadata (`scale`, `client_width/height`, saved path) |
+| `wc3_click(x, y, button, clicks, modifiers, normalized, mode)` | Click |
+| `wc3_mouse_move(x, y, normalized, mode)` | Move the cursor |
+| `wc3_drag(x1, y1, x2, y2, button, steps, normalized, mode)` | Drag / box-select |
+| `wc3_scroll(x, y, delta, mode)` | Mouse wheel; `delta` in notches (1 = 120 units) |
+| `wc3_key(keys, hold_ms, repeat, mode, send_char)` | Key or chord, e.g. `ctrl+1`, `shift+f2`, `alt+q` |
+| `wc3_type(text, mode)` | Type text |
+| `wc3_chat(text, to_all, mode)` | Chat line / cheat / `-command` |
+| `wc3_wait(seconds, until)` | Wait; `until` = `window`, `exit`, `responsive` |
+| `wc3_crash_report(since_iso)` | Exit code, fatal dialog, error logs, WER, event log, verdict |
+| `wc3_analyze_dump(path)` | Analyse a minidump with `cdb` or `minidump` |
+| `wc3_read_logs(max_files, max_lines)` | Tail the newest error/log files |
+
+All mouse coordinates are **client-area pixels** of the game window, matching a
+screenshot with `scale=1` (`client = image_px / scale`). `normalized=True`
+accepts 0..1 fractions.
+
+Input modes:
+
+- `background` (default) posts `WM_*` messages and never changes focus. Mouse
+  messages go to the deepest child window under the point. Classic WC3 (1.2x,
+  32-bit) ignores the coordinates in mouse messages and reads the real cursor
+  with `GetCursorPos`. For that build the plugin redirects the game's own
+  `GetCursorPos` import to a virtual cursor, so background clicks land on
+  target without moving your mouse. The redirect lasts until the game exits.
+  Set `WC3_VIRTUAL_CURSOR=0` to turn it off. While it is active, your real mouse
+  does not steer the game; any foreground-mode action hands control back.
+  Double-clicks are sent as two plain presses, which is how WC3 detects them.
+  Keys post only
+  `WM_KEYDOWN/UP`, because the game's own `TranslateMessage` produces the
+  `WM_CHAR`. Text and chat post `WM_CHAR`.
+- `foreground` uses `SendInput`. It brings the window forward and by default
+  restores the previous focus afterwards.
+
+`wc3_launch` passes `-nowfpause`, so the game keeps simulating while it is not
+focused. Background testing depends on this.
+
+The exit code is read through a process handle opened at launch/attach time,
+so a crash is reported with its NTSTATUS code (for example
+`0xC0000005 ACCESS_VIOLATION`) even for an attached game or a Reforged
+re-spawned process.
+
+## Tests
+
+`tests/fake_game.py` is a raw Win32 stand-in (class and title "Warcraft III",
+with its own WndProc like the game). It logs input and paints clicks. On F12 it
+writes a realistic `Errors\*.txt` and dies with a real access violation
+(`0xC0000005`).
+
+On Windows:
+
+```bat
+set PYTHONPATH=src
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\smoke_test.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\mcp_e2e_test.py
+```
+
+`smoke_test.py` calls the library directly. `mcp_e2e_test.py` drives the same
+flow over MCP stdio through `run_server.cmd`, the way Codex launches it. Notepad
+covers the game window during the run, and the test checks crash detection for
+an *attached* (not launched) game.
+
+## Limitations
+
+- Verified on classic 1.29.2 (32-bit): background menu clicks, double-clicks
+  and the lobby player-slot dropdown. Reforged (x64) has no virtual cursor yet,
+  so if background clicks miss there, use `mode="foreground"`.
+- The virtual cursor works by writing into the game's memory. Use it only for
+  local and offline testing, not in Battle.net games.
+- `PrintWindow` may return black frames for some DirectX configurations. The
+  `auto` method then tries WGC (if installed) and finally a desktop grab.
+- Elevated games reject messages from a non-elevated server, so run the agent
+  with matching privileges.
+- The `screen` capture method only shows the game when its window is visible
+  and uncovered.

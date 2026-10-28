@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "wc3": {
+      "command": "cmd.exe",
+      "args": ["/d", "/s", "/c", "scripts\\run_server.cmd"],
+      "cwd": ".",
+      "startup_timeout_sec": 180,
+      "tool_timeout_sec": 600,
+      "default_tools_approval_mode": "approve",
+      "env_vars": [
+        "WC3_EXE", "WC3_ERRORS_DIRS", "WC3_INPUT_MODE", "WC3_INPUT_DELAY_MS",
+        "WC3_TESTER_OUT", "WC3_TESTER_VENV", "WC3_SYMPATH",
+        "USERPROFILE", "USERNAME", "LOCALAPPDATA", "APPDATA", "ProgramData",
+        "TEMP", "TMP", "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "COMSPEC"
+      ]
+    }
+  }
+}
