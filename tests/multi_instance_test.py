@@ -116,6 +116,7 @@ async def main() -> int:
         WC3_ERRORS_DIRS=str(shared_errors),
         WC3_TESTER_OUT=str(tmp / "out"),
         WC3_INPUT_MODE="background",
+        WC3_SHARED_SERVER="0",  # private server: this test sets its own dirs
     )
     python = getattr(sys, "_base_executable", sys.executable)
     games = [

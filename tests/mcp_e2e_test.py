@@ -62,7 +62,8 @@ def write_minidump(pid: int, path: Path) -> bool:
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="wc3-e2e-"))
     log, errs = tmp / "events.jsonl", tmp / "errors"
-    env = dict(os.environ, WC3_ERRORS_DIRS=str(errs), WC3_TESTER_OUT=str(tmp / "out"))
+    env = dict(os.environ, WC3_ERRORS_DIRS=str(errs), WC3_TESTER_OUT=str(tmp / "out"),
+               WC3_SHARED_SERVER="0")  # private server: this test sets its own dirs
     game = subprocess.Popen([getattr(sys, "_base_executable", sys.executable),
                              str(ROOT / "tests" / "fake_game.py"), str(log), str(errs)])
     # A window on top of the game, to prove capture/input work while covered.

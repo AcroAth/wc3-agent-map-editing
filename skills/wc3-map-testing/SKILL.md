@@ -28,6 +28,9 @@ Use this skill whenever a task involves running or debugging a Warcraft III map
 
 - Every tool takes `instance` ("p1", "p2", ...); `wc3_instances()` lists them,
   `wc3_select(instance)` changes the default.
+- All Codex chats share one wc3 server, so games started in another chat show
+  up in `wc3_instances()` too. Pass `instance` explicitly and do not kill or
+  drive instances another chat is using.
 - `wc3_launch_lan(count=2, names=["Host", "Guest"])` starts p1..pN in the
   background, each on its own 127.0.0.N. The plugin's built-in bind hook does
   the ForceBindIP-style address binding; no external tool is needed. If the

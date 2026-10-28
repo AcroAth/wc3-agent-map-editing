@@ -125,3 +125,28 @@ analysis.
   sometimes not taken (map list, LAN game list); a second click worked.
   A process killed outside `wc3_kill` stays in the relay list until the
   server restarts (harmless; it just gets no answer).
+
+## Update 2026-10-28: one server shared by all chats (`shared.py`)
+- Why: each Codex chat started its own server, so chats had separate instance
+  lists and relays (two chats could both put their "p1" on 127.0.0.1).
+- How: the stdio entry point is a proxy (lowlevel MCP Server) that forwards
+  tools/list and tools/call over streamable HTTP to one daemon
+  (`server.py --daemon`, FastMCP streamable_http_app under uvicorn on
+  127.0.0.1, bearer token from `%LOCALAPPDATA%\wc3-tester\daemon.json`).
+  `WC3_SHARED_SERVER=0` keeps the old per-chat server; it is also the fallback.
+- Decisions: the daemon is started through WMI because the MCP client ends the
+  whole process tree of a closing chat (a detached Popen child died with it);
+  WMI does not pass the environment, so it goes through a one-shot file the
+  daemon deletes. Sync tools run in worker threads (the SDK otherwise runs
+  them on the event loop, so one chat's wc3_wait would stall all chats);
+  lifecycle tools share one lock. A daemon with a different code hash is
+  replaced only when it has no running game.
+- Considered sparfenyuk/mcp-proxy for the stdio-HTTP bridge; not used because
+  starting, sharing and replacing the daemon is the actual work, and the SDK
+  already in use covers the bridge in ~30 lines.
+- Verified: `tests/shared_server_test.py` 9/9 (two chats, one daemon; shared
+  instances; 4 s wait in A while B answers in 0.7 s; new chat keeps state;
+  401 without token; killed daemon restarts; outdated idle daemon replaced).
+- Limits: each proxied call opens a fresh HTTP session (~0.5 s overhead);
+  settings come from the chat that started the daemon; "current instance" is
+  global.

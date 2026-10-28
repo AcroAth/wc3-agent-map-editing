@@ -144,6 +144,29 @@ and joins. `wc3_kill(instance="p2")` mid-game simulates p2 dropping. The
 launch result's `lan_binding` is `"builtin"` or `"wrapper"`, and `bind_hook`
 reports the injected block and patched import slots.
 
+### One server shared by all chats
+
+Codex starts one MCP server per chat. Each of those is only a small stdio
+proxy: it starts (or finds) one background server and forwards every tool call
+to it, so all chats see the same instances, the same `p1`/`p2` numbering and
+the same LAN relay.
+
+- The shared server listens on 127.0.0.1 only and refuses requests without the
+  random token in `%LOCALAPPDATA%\wc3-tester\daemon.json` (log: `daemon.log`).
+- It is started through WMI so that closing the chat that started it does not
+  end it. It takes its settings (`WC3_EXE`, ...) from the chat that started it.
+- Tools run in worker threads: a long `wc3_wait` in one chat does not hold up
+  another. Launch, attach, kill, select and wrapper changes run one at a time.
+- "Current instance" is shared too, so with several chats pass `instance`
+  explicitly.
+- After a plugin update, the old server is replaced on the next call if no
+  game is running; otherwise it keeps serving its games until they end.
+- It exits after `WC3_DAEMON_IDLE_MIN` minutes (default 30) without calls and
+  without running games; the next call starts a new one.
+- `WC3_SHARED_SERVER=0` gives each chat its own private server again. The
+  proxy also falls back to that if the shared server cannot start.
+- `wc3_instances()["server"]` shows the answering server's pid.
+
 The exit code is read through a process handle opened at launch/attach time,
 so a crash is reported with its NTSTATUS code (for example
 `0xC0000005 ACCESS_VIOLATION`) even for an attached game or a Reforged
@@ -166,7 +189,12 @@ set PYTHONPATH=src
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_lanrelay.py
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_registry.py
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_bindhook.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\shared_server_test.py
 ```
+
+`shared_server_test.py` runs two chats (stdio proxies) against one shared
+server in a private `LOCALAPPDATA`. The other MCP tests set
+`WC3_SHARED_SERVER=0` because they pass their own folders to the server.
 
 `test_bindhook.py` checks the 64-bit hook against a Python socket probe and,
 when a 32-bit MSVC toolchain is installed, compiles and checks a small classic

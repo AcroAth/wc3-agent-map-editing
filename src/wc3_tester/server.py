@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
 
-from . import capture, crash, game, inputs, lanrelay, winapi, window
+from . import capture, crash, game, inputs, lanrelay, shared, winapi, window
 
 log = logging.getLogger("wc3_tester")
 
@@ -321,6 +322,7 @@ def wc3_instances() -> dict:
             "count": len(instances),
             "instances": instances,
             "lan_relay": lanrelay.status(),
+            "server": shared.info(),
         }
     except Exception as exc:
         return _error(exc)
@@ -750,13 +752,21 @@ def main() -> None:
         winapi.enable_dpi_awareness()
     except Exception:
         pass
+
+    if "--daemon" in sys.argv[1:]:
+        shared.run_daemon(mcp)  # one server shared by every chat
+        return
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.INFO,
         format="[wc3-tester] %(levelname)s %(name)s: %(message)s",
     )
-    log.info("starting wc3-tester MCP server on stdio")
-    mcp.run()
+    if os.environ.get("WC3_SHARED_SERVER", "1") == "0" or "--private" in sys.argv[1:]:
+        log.info("starting a private wc3-tester MCP server on stdio")
+        mcp.run()
+        return
+    log.info("starting wc3-tester stdio proxy to the shared server")
+    shared.run_proxy(fallback=mcp.run)
 
 
 if __name__ == "__main__":
