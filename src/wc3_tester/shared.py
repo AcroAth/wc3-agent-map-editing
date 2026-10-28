@@ -147,6 +147,14 @@ def run_daemon(mcp) -> None:
     last_request = [time.time()]
     idle_sec = float(os.environ.get("WC3_DAEMON_IDLE_MIN", "30")) * 60
 
+    # Load every module now: Codex may replace the plugin files while this
+    # server runs, and a later lazy import would then mix old and new code.
+    import importlib
+
+    for path in sorted(PKG_DIR.glob("*.py")):
+        if path.stem != "__init__":
+            with contextlib.suppress(Exception):
+                importlib.import_module(f"{__package__}.{path.stem}")
     _threaded_tools(mcp)
     app = mcp.streamable_http_app()
 
@@ -246,7 +254,9 @@ def _spawn_daemon() -> None:
             "from wc3_tester.server import main; main()")
     from . import launcher
 
-    launcher._wmi_create(subprocess.list2cmdline([sys.executable, "-c", code, "--daemon"]), src)
+    # Working folder outside the plugin cache: a process whose current
+    # directory is inside the cache blocks Codex from replacing the plugin.
+    launcher._wmi_create(subprocess.list2cmdline([sys.executable, "-c", code, "--daemon"]), str(state_dir()))
 
 
 def ensure_daemon() -> dict:
