@@ -24,6 +24,22 @@ Use this skill whenever a task involves running or debugging a Warcraft III map
    any `.dmp` in `new_files`.
 7. Always finish with `wc3_kill()` so no game process is left behind.
 
+## Multiplayer (several instances)
+
+- Every tool takes `instance` ("p1", "p2", ...); `wc3_instances()` lists them,
+  `wc3_select(instance)` changes the default.
+- `wc3_launch_lan(count=2, names=["Host", "Guest"])` starts p1..pN in the
+  background, each on its own 127.0.0.N. The plugin's built-in bind hook does
+  the ForceBindIP-style address binding; no external tool is needed. If the
+  user explicitly configured a wrapper with `wc3_set_launch_wrapper`, that is
+  used instead. Check `lan_binding`/`bind_hook` in the result and
+  `wc3_instances()` if a copy does not appear on LAN.
+- Host: p1 presses `l` (LAN) → Create Game → pick the map → Create. Others: `l`,
+  wait ~2 s for the game to appear (the relay forwards it once per second;
+  `wc3_instances()["lan_relay"]["games"]` shows what it sees), select it, Join.
+- Player leaves: `wc3_kill(instance="p2")` (a drop), or drive p2's menu
+  (F10 → quit) for a graceful leave. Screenshot the host afterwards.
+
 ## Coordinates
 
 - Every mouse tool takes **client-area pixels** of the game window, matching a

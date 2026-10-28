@@ -100,8 +100,8 @@ def main() -> int:
         if not check("fake window appears", bool(hwnd), str(hwnd)):
             return 1
 
-        attach_info = game.attach(pid=proc.pid, title="Warcraft III")
-        session = game.get_session()
+        attach_info = game.attach(pid=proc.pid, title="Warcraft III", instance="p1")
+        session = game.get_session("p1")
         if session is not None:
             session.popen = proc  # ensure the exit code is available
         check(
@@ -109,10 +109,17 @@ def main() -> int:
             attach_info.get("pid") == proc.pid and attach_info.get("hwnd") == hwnd,
             str(attach_info.get("pid")),
         )
+        check(
+            "attach registers the instance",
+            attach_info.get("instance") == "p1"
+            and game.get_session("p1") is session
+            and game.get_session() is session,
+            str(attach_info.get("instance")),
+        )
         time.sleep(0.4)  # let tkinter paint the initial canvas
 
         # -- screenshot -----------------------------------------------------
-        image, info = capture.capture(hwnd, max_width=800)
+        image, info = capture.capture(hwnd, max_width=800, instance="p1")
         saved = Path(info.get("path", ""))
         check("screenshot has pixels", image.width > 0 and image.height > 0)
         check("screenshot is not blank", not capture.is_blank(image))
@@ -173,7 +180,7 @@ def main() -> int:
         inputs.key(hwnd, "f12", mode="background")
 
         def _exited_with_code():
-            state = game.status()
+            state = game.status("p1")
             if state.get("state") in ("exited", "crashed") and state.get("exit_code") is not None:
                 return state
             return None
@@ -192,7 +199,12 @@ def main() -> int:
             f"{final.get('exit_code_hex')} {final.get('exit_code_name')}",
         )
 
-        report = crash.crash_report()
+        report = crash.crash_report(instance="p1")
+        check(
+            "crash report names the instance",
+            report.get("instance") == "p1",
+            str(report.get("instance")),
+        )
         check(
             "crash report sees crash state",
             report.get("state") in ("crashed", "exited"),
@@ -232,7 +244,7 @@ def main() -> int:
 
         try:
             if proc.poll() is None:
-                game.kill()
+                game.kill("p1")
         except Exception:
             pass
     except Exception as exc:

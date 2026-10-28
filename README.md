@@ -53,6 +53,7 @@ Environment variables (all optional):
 | `WC3_ERRORS_DIRS` | Extra `;`-separated error/log directories |
 | `WC3_TESTER_OUT` | Root for session folders (screenshots, runs) |
 | `WC3_TESTER_VENV` | Where the launcher keeps its venv |
+| `WC3_LAUNCH_WRAPPER` | Optional external LAN wrapper, e.g. `ForceBindIP.exe {ip}` (overrides the built-in hook) |
 | `WC3_SYMPATH` | Symbol path for `cdb` (enables `srv*<path>*`) |
 | `WC3_VIRTUAL_CURSOR` | `0` disables the virtual cursor for classic WC3 |
 | `WC3_FRAME_MS` | Wait after moving the virtual cursor (default 50) |
@@ -63,10 +64,14 @@ Session output defaults to `%LOCALAPPDATA%\wc3-tester\runs\<timestamp>\`.
 
 | Tool | Purpose |
 | --- | --- |
-| `wc3_launch(map_path, exe, windowed, nowfpause, extra_args, flavor)` | Start the game (and optionally load a map), wait for its window |
-| `wc3_attach(pid, title)` | Attach to a running game |
+| `wc3_launch(map_path, exe, windowed, nowfpause, extra_args, flavor, instance, background, maximized, lan_ip, player_name, wrapper)` | Start the game (and optionally load a map), wait for its window |
+| `wc3_launch_lan(count, exe, map_path, names, background, maximized, wrapper)` | Start p1..pN that can find each other's LAN games (see below) |
+| `wc3_set_launch_wrapper(template)` | Optionally override the built-in LAN socket binding with an external wrapper |
+| `wc3_attach(pid, title, instance)` | Attach to a running game |
+| `wc3_instances()` | List instances, their state, and the LAN relay status |
+| `wc3_select(instance)` | Make an instance the default target |
 | `wc3_status()` | State, exit code, hung, uptime, CPU/RAM, fatal dialog |
-| `wc3_kill()` | Terminate the process tree |
+| `wc3_kill(instance, all)` | Terminate one instance (simulates a player dropping) or all |
 | `wc3_screenshot(method, max_width, restore_minimized)` | Client-area screenshot + metadata (`scale`, `client_width/height`, saved path) |
 | `wc3_click(x, y, button, clicks, modifiers, normalized, mode)` | Click |
 | `wc3_mouse_move(x, y, normalized, mode)` | Move the cursor |
@@ -79,6 +84,9 @@ Session output defaults to `%LOCALAPPDATA%\wc3-tester\runs\<timestamp>\`.
 | `wc3_crash_report(since_iso)` | Exit code, fatal dialog, error logs, WER, event log, verdict |
 | `wc3_analyze_dump(path)` | Analyse a minidump with `cdb` or `minidump` |
 | `wc3_read_logs(max_files, max_lines)` | Tail the newest error/log files |
+
+Every tool takes an optional `instance` (`"p1"`, `"p2"`, ...); the default is
+the last launched, attached or selected one.
 
 All mouse coordinates are **client-area pixels** of the game window, matching a
 screenshot with `scale=1` (`client = image_px / scale`). `normalized=True`
@@ -102,7 +110,39 @@ Input modes:
   restores the previous focus afterwards.
 
 `wc3_launch` passes `-nowfpause`, so the game keeps simulating while it is not
-focused. Background testing depends on this.
+focused. Background testing depends on this. With `background=True` (default)
+the game is started through WMI, which keeps it from taking keyboard focus; it
+is then maximized without being activated and moved behind other windows.
+
+### Several instances and LAN games
+
+Each launch closes the "Warcraft III Game Application" single-instance event in
+running games, so another copy can start. `player_name` sets the LAN name of
+that copy (registry `String\userlocal`, restored after the start).
+
+Copies on one PC cannot see each other's LAN games on their own: 1.29 always
+uses UDP 6112 for LAN and only one copy can hold it (the second shows "unable
+to connect to network"). The fix has two parts:
+
+1. **Built-in socket binding** (`bindhook.py`), the useful part of ForceBindIP
+   without the external tool. On each LAN launch the plugin redirects the
+   game's Winsock imports so instance N binds `127.0.0.N` instead of
+   `0.0.0.0`; unbound `connect`/`sendto` sockets are pre-bound too, and modules
+   loaded later are covered by a watcher. This works for 32-bit classic and
+   64-bit Reforged builds. A user-installed wrapper such as ForceBindIP can
+   still be selected with
+   `wc3_set_launch_wrapper("C:/Tools/ForceBindIP/ForceBindIP.exe {ip}")`
+   (or `WC3_LAUNCH_WRAPPER`); clear both to use the built-in hook.
+2. **The plugin's LAN relay** (`lanrelay.py`), a thread in the MCP server.
+   Broadcasts from a game bound to 127.0.0.N reach no other copy, so every
+   second the relay asks each copy for its hosted game (`W3GS_SEARCHGAME`) and
+   forwards the answer (`W3GS_GAMEINFO`) to the others from the host's
+   address. It only sends ordinary LAN packets and does not touch the games.
+
+Then: `wc3_launch_lan(count=2)`; host p1 opens LAN → Create Game; p2 opens LAN
+and joins. `wc3_kill(instance="p2")` mid-game simulates p2 dropping. The
+launch result's `lan_binding` is `"builtin"` or `"wrapper"`, and `bind_hook`
+reports the injected block and patched import slots.
 
 The exit code is read through a process handle opened at launch/attach time,
 so a crash is reported with its NTSTATUS code (for example
@@ -122,7 +162,15 @@ On Windows:
 set PYTHONPATH=src
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\smoke_test.py
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\mcp_e2e_test.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\multi_instance_test.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_lanrelay.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_registry.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_bindhook.py
 ```
+
+`test_bindhook.py` checks the 64-bit hook against a Python socket probe and,
+when a 32-bit MSVC toolchain is installed, compiles and checks a small classic
+(x86) Winsock probe as well.
 
 `smoke_test.py` calls the library directly. `mcp_e2e_test.py` drives the same
 flow over MCP stdio through `run_server.cmd`, the way Codex launches it. Notepad
@@ -134,8 +182,11 @@ an *attached* (not launched) game.
 - Verified on classic 1.29.2 (32-bit): background menu clicks, double-clicks
   and the lobby player-slot dropdown. Reforged (x64) has no virtual cursor yet,
   so if background clicks miss there, use `mode="foreground"`.
-- The virtual cursor works by writing into the game's memory. Use it only for
-  local and offline testing, not in Battle.net games.
+- The virtual cursor and the LAN bind hook work by writing into the game's
+  memory. Use them only for local and offline testing, not on Battle.net.
+- The LAN bind hook rewrites the game's Winsock import slots. If a build
+  resolves Winsock with `GetProcAddress` instead, fall back to an external
+  wrapper via `wc3_set_launch_wrapper`.
 - `PrintWindow` may return black frames for some DirectX configurations. The
   `auto` method then tries WGC (if installed) and finally a desktop grab.
 - Elevated games reject messages from a non-elevated server, so run the agent

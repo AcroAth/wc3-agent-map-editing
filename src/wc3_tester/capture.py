@@ -47,18 +47,19 @@ def is_blank(image: Image.Image, tolerance: int = 4) -> bool:
     return all(hi - lo <= tolerance for lo, hi in extrema)
 
 
-def _out_dir() -> Path:
+def _out_dir(instance: str | None = None) -> Path:
     # Imported lazily to avoid a cycle (game imports crash, crash is standalone).
     from . import game
 
     try:
-        return game.out_dir()
+        return game.out_dir(instance)
     except Exception:
         base = Path(
             os.environ.get("WC3_TESTER_OUT")
             or (Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "wc3-tester" / "runs")
         )
-        path = base / "attached"
+        name = f"attached-{instance}" if instance else "attached"
+        path = base / name
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -252,6 +253,7 @@ def capture(
     method: str = "auto",
     max_width: int = 1280,
     restore_minimized: bool = False,
+    instance: str | None = None,
 ) -> tuple[Image.Image, dict]:
     """Capture the client area of *hwnd*.
 
@@ -354,7 +356,7 @@ def capture(
         info["resize_error"] = str(exc)
 
     try:
-        path = _save_png(image, _out_dir())
+        path = _save_png(image, _out_dir(instance))
         info["path"] = path
     except Exception as exc:
         info["save_error"] = str(exc)
@@ -367,12 +369,17 @@ def screenshot_png(
     method: str = "auto",
     max_width: int = 1280,
     restore_minimized: bool = False,
+    instance: str | None = None,
 ) -> tuple[bytes, dict]:
     """Convenience wrapper returning PNG bytes (what the MCP tool ships)."""
     import io
 
     image, info = capture(
-        hwnd, method=method, max_width=max_width, restore_minimized=restore_minimized
+        hwnd,
+        method=method,
+        max_width=max_width,
+        restore_minimized=restore_minimized,
+        instance=instance,
     )
     buf = io.BytesIO()
     image.save(buf, format="PNG")

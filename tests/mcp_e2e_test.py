@@ -80,10 +80,18 @@ async def main() -> int:
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 tools = {t.name for t in (await s.list_tools()).tools}
-                check("16 tools listed", len(tools) == 16, ", ".join(sorted(tools)))
+                check("20 tools listed", len(tools) == 20, ", ".join(sorted(tools)))
 
-                att = payload(await s.call_tool("wc3_attach", {"pid": game.pid}))
+                att = payload(await s.call_tool("wc3_attach", {"pid": game.pid, "instance": "p1"}))
                 check("attach by pid", att.get("pid") == game.pid, str(att)[:200])
+                check("attach registers instance", att.get("instance") == "p1", str(att.get("instance")))
+
+                inst = payload(await s.call_tool("wc3_instances", {}))
+                check("wc3_instances lists p1 as current",
+                      any(i.get("instance") == "p1" and i.get("current") for i in inst.get("instances", [])),
+                      json.dumps(inst)[:300])
+                sel = payload(await s.call_tool("wc3_select", {"instance": "p1"}))
+                check("wc3_select returns p1 status", sel.get("instance") == "p1", str(sel)[:200])
 
                 shot = await s.call_tool("wc3_screenshot", {"max_width": 640})
                 kinds = [c.type for c in shot.content]
@@ -95,6 +103,9 @@ async def main() -> int:
 
                 clk = payload(await s.call_tool("wc3_click", {"x": 0.25, "y": 0.5, "normalized": True}))
                 check("click reports game_state", (clk.get("game_state") or {}).get("state") == "running", str(clk)[:200])
+                check("click reports instance", clk.get("instance") == "p1", str(clk.get("instance")))
+                clk2 = payload(await s.call_tool("wc3_click", {"x": 0.3, "y": 0.6, "normalized": True, "instance": "p1"}))
+                check("explicit instance still targets p1", clk2.get("instance") == "p1", str(clk2)[:200])
                 await s.call_tool("wc3_chat", {"text": "greedisgood 500"})
                 await asyncio.sleep(0.5)
                 ev = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]

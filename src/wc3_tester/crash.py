@@ -746,11 +746,15 @@ def _verdict(state: dict, parsed: list[dict], new_files: list[dict], wer: list[d
     return " ".join(parts)
 
 
-def crash_report(since: datetime | str | None = None) -> dict:
-    """Collect everything known about crashes since *since* (default: session start)."""
+def crash_report(
+    since: datetime | str | None = None, instance: str | None = None
+) -> dict:
+    """Collect everything known about crashes since *since* (default: start of
+    *instance*, or the current instance when none is given)."""
     from . import game  # local import avoids a cycle
 
-    session = game.get_session()
+    session = game.get_session(instance)
+    instance_name = instance or (session.instance if session else None)
     since_dt = _as_utc(
         since,
         default=session.start_time if session and session.start_time else None,
@@ -758,9 +762,14 @@ def crash_report(since: datetime | str | None = None) -> dict:
     since_ts = since_dt.timestamp()
 
     try:
-        state = game.status()
+        state = game.status(instance)
     except Exception as exc:
         state = {"state": "unknown", "error": str(exc)}
+
+    # Every game writes to the same %USERPROFILE%\Documents\Warcraft III\Errors
+    # directories, so with several instances alive a file cannot be attributed
+    # to one of them.
+    shared_error_dirs = len(getattr(game, "_instances", {})) > 1
 
     exe = session.exe if session else None
     dirs = error_dirs(exe)
@@ -808,7 +817,8 @@ def crash_report(since: datetime | str | None = None) -> dict:
             parsed.append(parse_error_txt(item["path"]))
 
     events = event_log(since_dt)
-    return {
+    result = {
+        "instance": instance_name,
         "since": since_dt.isoformat(),
         "state": state.get("state"),
         "running": state.get("running"),
@@ -824,3 +834,11 @@ def crash_report(since: datetime | str | None = None) -> dict:
         "event_log": events,
         "verdict": _verdict(state, parsed, new_files, wer),
     }
+    if shared_error_dirs:
+        result["shared_error_dirs"] = True
+        result["shared_error_note"] = (
+            "Several game instances are registered and they share the same "
+            "Errors directories; new files are reported since this "
+            "instance's start time but cannot be attributed to it."
+        )
+    return result

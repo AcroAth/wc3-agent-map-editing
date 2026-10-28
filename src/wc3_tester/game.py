@@ -1,8 +1,10 @@
 """Game process lifecycle: launch, attach, status, kill.
 
-A single module-level :class:`Session` describes the game instance the MCP
-server is currently working with.  Lifecycle state is intentionally kept in
-memory: launching a new game replaces the previous session.
+Several game instances can be registered at once (LAN multi-player testing).
+Each :class:`Session` is stored in an insertion-ordered registry keyed by a
+short instance id (``"p1"``, ``"p2"``, ...); ``_current`` names the instance
+the MCP tools act on when no explicit ``instance`` is passed.  Lifecycle state
+is intentionally kept in memory.
 """
 
 from __future__ import annotations
@@ -47,6 +49,12 @@ REFORGED_EXE_REL = r"_retail_\x86_64\Warcraft III.exe"
 
 @dataclass
 class Session:
+    instance: str = "p1"
+    lan_ip: str | None = None
+    player_name: str | None = None
+    lan_binding: str | None = None  # "builtin" or "wrapper"
+    bind_hook: dict | None = None
+    background: bool = True
     pid: int | None = None
     hwnd: int | None = None
     exe: str | None = None
@@ -63,7 +71,11 @@ class Session:
     proc_handle: int | None = None
 
 
-_session: Session | None = None
+_instances: dict[str, Session] = {}
+_current: str | None = None
+
+# Session states that mean "no live process anymore".
+_DEAD_STATES = {"exited", "crashed", "not_started"}
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _SYNCHRONIZE = 0x00100000
@@ -102,13 +114,107 @@ def _handle_exit_code(handle: int | None) -> int | None:
         return None
 
 
-def get_session() -> Session | None:
-    return _session
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+
+def _known_ids() -> str:
+    return ", ".join(repr(name) for name in _instances) or "none"
+
+
+def get_session(instance: str | None = None) -> Session | None:
+    """The session for *instance*, or the current one when *instance* is None.
+
+    With no current instance set, a lone registered instance is returned.
+    An unknown explicit id raises ``KeyError``.
+    """
+    if instance is None:
+        if _current is not None and _current in _instances:
+            return _instances[_current]
+        if len(_instances) == 1:
+            return next(iter(_instances.values()))
+        return None
+    try:
+        return _instances[instance]
+    except KeyError:
+        raise KeyError(
+            f"unknown game instance {instance!r} (known instances: {_known_ids()})"
+        ) from None
 
 
 def set_session(session: Session | None) -> None:
-    global _session
-    _session = session
+    """Register *session* under its ``instance`` id and make it current."""
+    global _current
+    if session is None:
+        _current = None
+        return
+    _instances[session.instance] = session
+    _current = session.instance
+
+
+def _instance_state(name: str) -> str:
+    try:
+        return str(status(name).get("state") or "unknown")
+    except Exception:
+        return "unknown"
+
+
+def _instance_running(name: str) -> bool:
+    try:
+        state = status(name)
+    except Exception:
+        return False
+    if state.get("running"):
+        return True
+    return state.get("state") in ("running", "hung")
+
+
+def next_instance_id() -> str:
+    """First unused ``p1``, ``p2``, ... id.
+
+    Dead registry entries are dropped first, but only when nothing is running
+    at all: while a game is alive, dead entries are kept so their crash
+    reports stay addressable.
+    """
+    global _current
+    if not any(_instance_running(name) for name in list(_instances)):
+        for name in list(_instances):
+            if _instance_state(name) in _DEAD_STATES:
+                _instances.pop(name, None)
+                if _current == name:
+                    _current = None
+    number = 1
+    while f"p{number}" in _instances:
+        number += 1
+    return f"p{number}"
+
+
+def list_instances() -> list[dict]:
+    """All registered instances, in registration order."""
+    result: list[dict] = []
+    for name, session in list(_instances.items()):
+        result.append(
+            {
+                "instance": name,
+                "pid": session.pid,
+                "hwnd": session.hwnd,
+                "player_name": session.player_name,
+                "lan_ip": session.lan_ip,
+                "lan_binding": session.lan_binding,
+                "current": name == _current,
+                "state": _instance_state(name),
+            }
+        )
+    return result
+
+
+def select(instance: str) -> dict:
+    """Make *instance* the current one and return its status."""
+    global _current
+    get_session(instance)  # validates, raises KeyError for unknown ids
+    _current = instance
+    return status(instance)
 
 
 def _runs_root() -> Path:
@@ -121,15 +227,20 @@ def _runs_root() -> Path:
     return Path.home() / "wc3-tester" / "runs"
 
 
-def out_dir() -> Path:
-    """Session output directory (created on demand)."""
-    if _session and _session.out_dir:
-        path = Path(_session.out_dir)
+def out_dir(instance: str | None = None) -> Path:
+    """Per-instance output directory (created on demand).
+
+    ``<runs_root>/<start-timestamp>-<instance>`` for launched games and
+    ``<runs_root>/attached-<instance>`` for attached ones.
+    """
+    session = get_session(instance)
+    if session and session.out_dir:
+        path = Path(session.out_dir)
     else:
-        if _session and _session.start_time:
-            name = _session.start_time.strftime("%Y%m%d-%H%M%S")
+        if session and session.start_time:
+            name = f"{session.start_time.strftime('%Y%m%d-%H%M%S')}-{session.instance}"
         else:
-            name = "attached"
+            name = f"attached-{instance}" if instance else "attached"
         path = _runs_root() / name
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -209,13 +320,37 @@ def build_args(
     return args
 
 
-def _new_window_after(started_ts: float) -> int | None:
-    """Fallback for Reforged, which re-spawns the real game process."""
+def _window_for_pid(pid: int | None) -> int | None:
+    if not pid:
+        return None
+    try:
+        candidate = window.find_window(pid=pid)
+        if candidate:
+            candidate_pid = window.window_pid(candidate)
+            if (
+                window.process_name_of(candidate_pid)
+                not in window.EXCLUDED_PROCESS_NAMES
+            ):
+                return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _new_window_after(
+    started_ts: float, exclude_pids: set[int] | None = None
+) -> int | None:
+    """Fallback for Reforged, which re-spawns the real game process.
+
+    Windows owned by the pids of other registered instances are ignored so a
+    new instance cannot accidentally grab a sibling's window.
+    """
     import psutil
 
+    exclude = set(exclude_pids or ())
     for info in window.list_windows():
         pid = info.get("pid") or 0
-        if not pid:
+        if not pid or int(pid) in exclude:
             continue
         if (info.get("process") or "").lower() in window.EXCLUDED_PROCESS_NAMES:
             continue
@@ -235,6 +370,79 @@ def _new_window_after(started_ts: float) -> int | None:
     return None
 
 
+def _wait_for_window(
+    pid: int | None,
+    popen: subprocess.Popen | None,
+    started_ts: float,
+    wait_window_sec: int,
+    exclude_pids: set[int] | None = None,
+) -> tuple[int | None, str]:
+    deadline = time.time() + max(5, int(wait_window_sec))
+    hwnd: int | None = None
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            hwnd = _window_for_pid(pid)
+        except Exception as exc:
+            last_error = str(exc)
+        if not hwnd:
+            # Also covers the Reforged re-spawn / dead launcher case.
+            hwnd = _new_window_after(started_ts, exclude_pids=exclude_pids)
+        if hwnd:
+            break
+        time.sleep(0.5)
+    return hwnd, last_error
+
+
+def _terminate_tree(
+    pid: int | None, popen: subprocess.Popen | None = None
+) -> tuple[list[int], list[str]]:
+    """Terminate a game process tree; never raises."""
+    killed: list[int] = []
+    errors: list[str] = []
+    if not pid:
+        return killed, errors
+    try:
+        import psutil
+
+        proc = psutil.Process(int(pid))
+        procs = proc.children(recursive=True) + [proc]
+        if (
+            popen is not None
+            and popen.pid != pid
+            and popen.poll() is None
+        ):
+            try:
+                procs.append(psutil.Process(popen.pid))
+            except Exception:
+                pass
+        # De-duplicate while preserving order.
+        seen: set[int] = set()
+        procs = [p for p in procs if not (p.pid in seen or seen.add(p.pid))]
+        for child in procs:
+            try:
+                child.terminate()
+                killed.append(child.pid)
+            except Exception as exc:
+                errors.append(f"terminate {child.pid}: {exc}")
+        _gone, alive = psutil.wait_procs(procs, timeout=3)
+        for leftover in alive:
+            try:
+                leftover.kill()
+            except Exception as exc:
+                errors.append(f"kill {leftover.pid}: {exc}")
+        if alive:
+            psutil.wait_procs(alive, timeout=3)
+        if popen is not None:
+            try:
+                popen.poll()
+            except Exception:
+                pass
+    except Exception as exc:
+        errors.append(str(exc))
+    return killed, errors
+
+
 def launch(
     exe: str | None = None,
     map_path: str | None = None,
@@ -243,11 +451,36 @@ def launch(
     extra_args: list[str] | None = None,
     flavor: str = "auto",
     wait_window_sec: int = 90,
+    instance: str | None = None,
+    background: bool = True,
+    maximized: bool = True,
+    lan_ip: str | None = None,
+    player_name: str | None = None,
+    wrapper: str | None = None,
 ) -> dict:
-    """Start Warcraft III and wait for its window."""
+    """Start Warcraft III and wait for its window (one process per instance).
+
+    With ``lan_ip`` the instance joins the LAN discovery relay.  By default its
+    sockets are forced onto that address by the built-in bind hook
+    (:mod:`bindhook`), which is the part ForceBindIP would otherwise do.  A
+    configured launch wrapper (``wrapper`` / ``WC3_LAUNCH_WRAPPER`` /
+    ``wc3_set_launch_wrapper``) is used instead when present.
+    """
+    from . import lanrelay, launcher
     from . import winapi
 
     winapi.enable_dpi_awareness()
+
+    target_instance = instance or next_instance_id()
+    if _instance_running(target_instance):
+        raise RuntimeError(
+            f"instance {target_instance} is still running; "
+            "kill it first or pick another id"
+        )
+
+    wrapper_cmd = launcher.launch_wrapper(wrapper) if lan_ip else None
+    lan_binding = "wrapper" if wrapper_cmd else ("builtin" if lan_ip else None)
+
     exe_path = resolve_exe(exe)
     exe_dir = str(Path(exe_path).parent)
     resolved_flavor = flavor_for(exe_path, flavor)
@@ -268,47 +501,63 @@ def launch(
 
     started = datetime.now(timezone.utc)
     started_ts = time.time()
-    out = _runs_root() / started.strftime("%Y%m%d-%H%M%S")
+    out = _runs_root() / f"{started.strftime('%Y%m%d-%H%M%S')}-{target_instance}"
     try:
         out.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 
-    log.info("Launching %s %s (cwd=%s)", exe_path, args, exe_dir)
-    popen = subprocess.Popen(
-        [exe_path, *args],
-        cwd=exe_dir,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
+    exclude_pids = {
+        int(session.pid)
+        for name, session in _instances.items()
+        if name != target_instance and session.pid
+    }
 
-    deadline = time.time() + max(5, int(wait_window_sec))
-    hwnd: int | None = None
-    last_error = ""
-    while time.time() < deadline:
-        if popen.poll() is None:
+    log.info(
+        "Launching instance %s: %s %s (cwd=%s, background=%s)",
+        target_instance,
+        exe_path,
+        args,
+        exe_dir,
+        background,
+    )
+    released = launcher.release_single_instance()
+    early_hook = None
+    with launcher.lan_identity(player_name):
+        start_pid, popen = launcher.start_process(
+            exe_path, args, exe_dir, background, wrapper=wrapper_cmd, ip=lan_ip
+        )
+        if lan_binding == "builtin" and resolved_flavor == "classic":
+            # Classic WC3 may create its UDP 6112 socket while the window is
+            # still being created.  Try to get the hook in as early as
+            # possible; if the process is not ready yet, the post-window
+            # install below is the authoritative attempt.
+            from . import bindhook
+
             try:
-                candidate = window.find_window(pid=popen.pid)
-                if candidate:
-                    candidate_pid = window.window_pid(candidate)
-                    if (
-                        window.process_name_of(candidate_pid)
-                        not in window.EXCLUDED_PROCESS_NAMES
-                    ):
-                        hwnd = candidate
+                early_hook = bindhook.install(start_pid, lan_ip, timeout=10)
+                log.info("early bind hook installed in pid %s", start_pid)
             except Exception as exc:
-                last_error = str(exc)
-        if not hwnd:
-            # Also covers the Reforged re-spawn / dead launcher case.
-            hwnd = _new_window_after(started_ts)
-        if hwnd:
-            break
-        time.sleep(0.5)
+                log.info("early bind hook for pid %s not ready: %s", start_pid, exc)
+        hwnd, last_error = _wait_for_window(
+            start_pid,
+            popen,
+            started_ts,
+            wait_window_sec,
+            exclude_pids=exclude_pids,
+        )
 
     if not hwnd:
-        code = popen.poll()
+        if lan_binding == "builtin":
+            from . import bindhook
+
+            if early_hook is not None:
+                try:
+                    early_hook.uninstall()
+                except Exception:
+                    pass
+            bindhook.forget(start_pid)
+        code = popen.poll() if popen is not None else None
         detail = ""
         if code is not None:
             code_u = code & 0xFFFFFFFF
@@ -318,8 +567,62 @@ def launch(
             f"{wait_window_sec}s{detail}. {last_error}".strip()
         )
 
-    pid = window.window_pid(hwnd) or popen.pid
+    placement = launcher.place_window(hwnd, maximized, to_back=background)
+
+    pid = window.window_pid(hwnd) or start_pid
+    if popen is not None and popen.pid != pid:
+        popen = None  # the wrapper, not the game
+    bind_info: dict | None = None
+    if lan_binding == "builtin":
+        from . import bindhook
+
+        if pid != start_pid:
+            # An early hook on a launcher is useless once the real game runs;
+            # restore its imports before targeting the game process.
+            if early_hook is not None:
+                try:
+                    early_hook.uninstall()
+                except Exception:
+                    pass
+            bindhook.forget(start_pid)
+        try:
+            bind_info = bindhook.install(pid, lan_ip, timeout=20).info()
+        except Exception as exc:
+            _terminate_tree(pid, popen)
+            if pid != start_pid:
+                bindhook.forget(start_pid)
+            raise RuntimeError(
+                f"Could not force instance {target_instance} onto LAN address "
+                f"{lan_ip!r}: {exc}"
+            ) from exc
+
+    lan: dict | None = None
+    if lan_ip:
+        try:
+            lanrelay.relay().add(lan_ip)
+            lan = {"binding": lan_binding, "relay": True}
+            if wrapper_cmd:
+                lan["wrapper"] = wrapper_cmd.format(ip=lan_ip)
+            if bind_info:
+                lan["bind_hook"] = bind_info
+        except Exception as exc:
+            _terminate_tree(pid, popen)
+            if bind_info:
+                from . import bindhook
+
+                bindhook.forget(pid)
+            raise RuntimeError(
+                f"Could not add LAN address {lan_ip!r} of instance "
+                f"{target_instance} to the discovery relay: {exc}"
+            ) from exc
+
     session = Session(
+        instance=target_instance,
+        lan_ip=lan_ip,
+        player_name=player_name,
+        lan_binding=lan_binding,
+        bind_hook=bind_info,
+        background=background,
         pid=pid,
         hwnd=hwnd,
         exe=exe_path,
@@ -332,8 +635,9 @@ def launch(
         proc_handle=_open_process_handle(pid),
     )
     set_session(session)
-    log.info("Launched pid=%s hwnd=%s", pid, hwnd)
+    log.info("Launched instance %s pid=%s hwnd=%s", target_instance, pid, hwnd)
     return {
+        "instance": target_instance,
         "pid": pid,
         "hwnd": hwnd,
         "args": args,
@@ -341,16 +645,94 @@ def launch(
         "exe": exe_path,
         "map_path": map_path,
         "flavor": resolved_flavor,
-        "launcher_pid": popen.pid,
+        "launcher_pid": start_pid,
+        "released_single_instance_markers": released,
         "window": window.describe(hwnd),
+        "background": background,
+        "maximized": maximized,
+        "lan_ip": lan_ip,
+        "player_name": player_name,
+        "lan_binding": lan_binding,
+        "bind_hook": bind_info,
+        "placement": placement,
+        "lan": lan,
     }
 
 
-def attach(pid: int | None = None, title: str | None = None) -> dict:
+def launch_lan(
+    count: int = 2,
+    exe: str | None = None,
+    map_path: str | None = None,
+    names: list[str] | None = None,
+    base_ip: str = "127.0.0.",
+    background: bool = True,
+    maximized: bool = True,
+    wait_window_sec: int = 90,
+    wrapper: str | None = None,
+) -> dict:
+    """Launch ``count`` instances that can see each other's LAN games.
+
+    Instances are ``p1``..``pN``; ``pK`` gets LAN address ``<base_ip>K`` and
+    player name ``names[K-1]`` (default ``"PK"``).  Each instance's Winsock
+    sockets are forced onto its address by :mod:`bindhook` unless an external
+    launch wrapper is configured.  ``map_path`` is passed to the first instance
+    (the host) only.  Stops at the first failure and reports which instances
+    did start.
+    """
+    try:
+        count = int(count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("count must be an integer between 2 and 12") from exc
+    if count < 2 or count > 12:
+        raise ValueError("count must be between 2 and 12")
+    if names is not None and not isinstance(names, (list, tuple)):
+        raise ValueError("names must be a list of player names or None")
+
+    started: list[dict] = []
+    for k in range(1, count + 1):
+        target_instance = f"p{k}"
+        raw_name = (
+            names[k - 1]
+            if names is not None and len(names) >= k
+            else None
+        )
+        player_name = str(raw_name) if raw_name else f"P{k}"
+        try:
+            info = launch(
+                exe=exe,
+                map_path=map_path if k == 1 else None,
+                instance=target_instance,
+                background=background,
+                maximized=maximized,
+                lan_ip=f"{base_ip}{k}",
+                player_name=player_name,
+                wait_window_sec=wait_window_sec,
+                wrapper=wrapper,
+            )
+        except Exception as exc:
+            log.error("launch_lan failed at %s: %s", target_instance, exc)
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_instance": target_instance,
+                "started_count": len(started),
+                "instances": started,
+            }
+        started.append(info)
+
+    return {"ok": True, "count": len(started), "instances": started}
+
+
+def attach(
+    pid: int | None = None,
+    title: str | None = None,
+    instance: str | None = None,
+) -> dict:
     """Attach to an already-running Warcraft III instance."""
     from . import winapi
 
     winapi.enable_dpi_awareness()
+    target_instance = instance or next_instance_id()
     hwnd = window.find_window(pid=pid, title=title)
     if not hwnd:
         raise RuntimeError(
@@ -368,12 +750,14 @@ def attach(pid: int | None = None, title: str | None = None) -> dict:
         created = datetime.fromtimestamp(proc.create_time(), tz=timezone.utc)
     except Exception:
         pass
-    out = _runs_root() / "attached"
+    out = _runs_root() / f"attached-{target_instance}"
     try:
         out.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
     session = Session(
+        instance=target_instance,
+        background=False,
         pid=actual_pid,
         hwnd=hwnd,
         exe=exe_path,
@@ -383,8 +767,9 @@ def attach(pid: int | None = None, title: str | None = None) -> dict:
         proc_handle=_open_process_handle(actual_pid),
     )
     set_session(session)
-    log.info("Attached to pid=%s hwnd=%s", actual_pid, hwnd)
+    log.info("Attached instance %s pid=%s hwnd=%s", target_instance, actual_pid, hwnd)
     return {
+        "instance": target_instance,
         "pid": actual_pid,
         "hwnd": hwnd,
         "exe": exe_path,
@@ -449,13 +834,15 @@ def _process_info(pid: int | None) -> tuple[bool, int | None, float | None, floa
         return False, None, None, None, None
 
 
-def status() -> dict:
-    """Full lifecycle status, JSON-serialisable and never raises."""
+def status(instance: str | None = None) -> dict:
+    """Full lifecycle status of one instance, JSON-serialisable, never raises."""
     from . import crash  # local import avoids an import cycle
 
-    session = _session
+    session = get_session(instance)
+    name = instance or (session.instance if session else None)
     if session is None:
         return {
+            "instance": name,
             "state": "not_started",
             "running": False,
             "pid": None,
@@ -518,6 +905,17 @@ def status() -> dict:
     elif session.start_time:
         uptime = max(0.0, now_ts - session.start_time.timestamp())
 
+    bind_info = session.bind_hook
+    if session.lan_binding == "builtin" and session.pid:
+        try:
+            from . import bindhook
+
+            live = bindhook.status(session.pid)
+            if live:
+                bind_info = live
+        except Exception:
+            pass
+
     title = ""
     client = [0, 0]
     if hwnd:
@@ -528,6 +926,7 @@ def status() -> dict:
             pass
 
     return {
+        "instance": session.instance,
         "state": state,
         "running": bool(running),
         "pid": pid,
@@ -537,6 +936,11 @@ def status() -> dict:
         "flavor": session.flavor,
         "start_time": session.start_time.isoformat() if session.start_time else None,
         "out_dir": str(session.out_dir) if session.out_dir else None,
+        "lan_ip": session.lan_ip,
+        "player_name": session.player_name,
+        "lan_binding": session.lan_binding,
+        "bind_hook": bind_info,
+        "background": session.background,
         "exit_code": code_u,
         "exit_code_hex": f"0x{code_u:08X}" if code_u is not None else None,
         "exit_code_name": exit_code_name(code) if code_u is not None else None,
@@ -550,57 +954,43 @@ def status() -> dict:
     }
 
 
-def kill() -> dict:
-    """Terminate the game process tree and return the final status."""
-    session = _session
+def kill(instance: str | None = None) -> dict:
+    """Terminate one instance's process tree and return the final status."""
+    session = get_session(instance)
+    name = instance or (session.instance if session else None)
     if session is None or not session.pid:
-        return {"killed": False, "reason": "no session", **status()}
+        return {
+            "instance": name,
+            "killed": False,
+            "reason": "no session",
+            **status(instance),
+        }
 
-    killed: list[int] = []
-    errors: list[str] = []
-    try:
-        import psutil
+    killed, errors = _terminate_tree(session.pid, session.popen)
+    if session.lan_ip:
+        from . import bindhook, lanrelay
 
-        proc = psutil.Process(session.pid)
-        procs = proc.children(recursive=True) + [proc]
-        if (
-            session.popen is not None
-            and session.popen.pid != session.pid
-            and session.popen.poll() is None
-        ):
-            try:
-                procs.append(psutil.Process(session.popen.pid))
-            except Exception:
-                pass
-        # De-duplicate while preserving order.
-        seen: set[int] = set()
-        procs = [p for p in procs if not (p.pid in seen or seen.add(p.pid))]
-        for child in procs:
-            try:
-                child.terminate()
-                killed.append(child.pid)
-            except Exception as exc:
-                errors.append(f"terminate {child.pid}: {exc}")
-        _gone, alive = psutil.wait_procs(procs, timeout=3)
-        for leftover in alive:
-            try:
-                leftover.kill()
-            except Exception as exc:
-                errors.append(f"kill {leftover.pid}: {exc}")
-        if alive:
-            psutil.wait_procs(alive, timeout=3)
-        if session.popen is not None:
-            try:
-                session.popen.poll()
-            except Exception:
-                pass
-    except Exception as exc:
-        errors.append(str(exc))
+        bindhook.forget(session.pid)
+        lanrelay.relay().remove(session.lan_ip)
 
     time.sleep(0.2)
-    final = status()
+    final = status(instance)
+    final["instance"] = name or final.get("instance")
     final["killed"] = bool(killed)
     final["killed_pids"] = killed
     if errors:
         final["kill_errors"] = errors
     return final
+
+
+def kill_all() -> list[dict]:
+    """Terminate every registered instance and return their final statuses."""
+    results: list[dict] = []
+    for name in list(_instances):
+        try:
+            results.append(kill(name))
+        except Exception as exc:
+            results.append(
+                {"instance": name, "killed": False, "error": str(exc)}
+            )
+    return results
