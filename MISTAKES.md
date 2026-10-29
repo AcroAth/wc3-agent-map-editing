@@ -10,3 +10,10 @@
 - Prepublication checks cover skill metadata, reference links, manifest wiring, version consistency and unchanged server/build dependencies. Native gameplay was not exercised by this documentation release.
 
 - Release export mistake: git archive applied the repository CRLF export rule to run_server.cmd, initially making an untouched launcher appear changed. The explicit allowed-file check caught it before publication. Restored the launcher directly from its baseline Git blob; byte comparisons verify no launcher change.
+
+## 2026-10-29 -- Rename repository to agent-map-editing
+
+- Prepared canonical repository URLs and install instructions for AcroAth/agent-map-editing, retaining wc3-tester plugin/server identity for compatibility. No implementation mistakes observed.
+- Renamed the existing public repository through authenticated GitHub settings after user sign-in. Verified unchanged repository ID 1436849124 and existing main commit 53f4254; no repository was deleted, created or made private. Updated the public About description. Canonical URL and install-instruction checks passed before publication.
+
+- User refined the repository name to wc3-agent-map-editing before link publication. The first tree-creation call against the intermediate name returned a connector KeyError during this rename; no branch update was made. Rechecked the owning repository and prepared canonical links for the user-selected final name.

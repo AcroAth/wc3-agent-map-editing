@@ -6,8 +6,8 @@
     "name": "AcroAth",
     "url": "https://github.com/AcroAth"
   },
-  "homepage": "https://github.com/AcroAth/wc3-tester",
-  "repository": "https://github.com/AcroAth/wc3-tester",
+  "homepage": "https://github.com/AcroAth/wc3-agent-map-editing",
+  "repository": "https://github.com/AcroAth/wc3-agent-map-editing",
   "license": "MIT",
   "keywords": [
     "warcraft-3",
@@ -28,7 +28,7 @@
     "shortDescription": "Edit and test Warcraft III maps with an agent.",
     "longDescription": "Agent Map Editing for Warcraft III bundles Warcraft III map editing, rebuilding and validation workflows with reproducible native testing and the WC3 Tester MCP server for game control, screenshots and crash diagnostics. Editing uses project-provided archive and build tools; native testing requires Windows and a compatible installed Warcraft III client.",
     "developerName": "AcroAth",
-    "websiteURL": "https://github.com/AcroAth/wc3-tester",
+    "websiteURL": "https://github.com/AcroAth/wc3-agent-map-editing",
     "category": "Engineering",
     "capabilities": [
       "Interactive",

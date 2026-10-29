@@ -1,8 +1,9 @@
 # Agent Map Editing for Warcraft III
 
 A skill pack and Codex plugin for editing, rebuilding, validating and testing
-**Warcraft III** custom maps. The existing `wc3-tester` repository, plugin ID
-and MCP server name are retained; the public display name is Agent Map Editing for Warcraft III.
+**Warcraft III** custom maps. The repository is `wc3-agent-map-editing`; the existing `wc3-tester` plugin ID
+and MCP server name are retained for compatibility. The public display name is
+Agent Map Editing for Warcraft III.
 
 ## Included workflows
 
@@ -45,12 +46,12 @@ such as a required testing model in your own applicable instructions.
 Requires Windows 10/11 and Python 3.11+ (`py` launcher or `python` on PATH).
 
 ```bat
-codex plugin marketplace add AcroAth/wc3-tester
+codex plugin marketplace add AcroAth/wc3-agent-map-editing
 codex plugin add wc3-tester@wc3-tester
 ```
 
 To work on a local clone instead, pass its folder:
-`codex plugin marketplace add C:\path\to\wc3-tester`.
+`codex plugin marketplace add C:\path\to\wc3-agent-map-editing`.
 
 Start a new Codex chat after installing or updating. A running chat keeps the
 server it started with.
