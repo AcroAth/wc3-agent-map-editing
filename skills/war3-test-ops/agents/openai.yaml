@@ -1,0 +1,4 @@
+interface:
+  display_name: "Warcraft III Test Operations"
+  short_description: "Verify Warcraft III gameplay locally or in a VM"
+  default_prompt: "Use $war3-test-ops to design proportionate test cases, verify Warcraft III on the selected Windows machine, and report observed gameplay evidence."

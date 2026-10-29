@@ -1,18 +1,25 @@
 ---
 name: wc3-map-testing
-description: Test Warcraft III maps with the wc3 MCP tools — launch/attach to the game, inspect it with screenshots, drive it with background or foreground input, and diagnose crashes from exit codes, WC3 error logs, WER reports and dumps.
+description: Operate the WC3 Tester MCP tools for Warcraft III launches, screenshots, input and crash diagnostics. Use war3-test-ops for test design and evidence review, and war3-map-ops for archive edits and rebuilds.
 ---
 
 # Testing Warcraft III maps with the wc3 MCP server
 
-Use this skill whenever a task involves running or debugging a Warcraft III map
-(classic 1.26–1.31 or Reforged 1.32+) on Windows with the `wc3` MCP tools.
+Use this tool guide when operating Warcraft III (classic 1.26–1.31 or Reforged
+1.32+) on Windows with the `wc3` MCP tools. For a gameplay verification task,
+first use [war3-test-ops](../war3-test-ops/SKILL.md) to prepare the fixture,
+actions, observations and stopping criteria. Use
+[war3-map-ops](../war3-map-ops/SKILL.md) for map modifications. Follow explicit
+local requirements about delegation and model choice.
 
 ## Test loop
 
-1. `wc3_launch(map_path="C:\\maps\\MyMap.w3x")` — or `wc3_attach()` if the game
-   is already running. Launch always uses `-nowfpause` by default so the game
-   keeps simulating while unfocused.
+1. Verify the selected Windows machine, client and exact candidate path/hash.
+   Inspect `wc3_instances()` and preserve existing sessions. Launch with an
+   explicit task-owned instance, for example
+   `wc3_launch(map_path="C:\\maps\\MyMap.w3x", instance="map-check")`, or attach
+   to an explicitly authorized running game. Pass that instance on every later
+   call. Launch uses `-nowfpause` by default so the game keeps simulating unfocused.
 2. `wc3_wait(until="responsive", seconds=30)` — never act on a window that is
    still loading or hung.
 3. `wc3_screenshot()` — establish the starting screen. Read `scale` and
@@ -22,7 +29,9 @@ Use this skill whenever a task involves running or debugging a Warcraft III map
 6. On any anomaly (frozen screen, unexpected exit, error dialog):
    `wc3_status()` then `wc3_crash_report()`, and `wc3_analyze_dump(path)` for
    any `.dmp` in `new_files`.
-7. Always finish with `wc3_kill()` so no game process is left behind.
+7. Review observations against the prepared criteria. Close only verified
+   task-owned temporary instances with `wc3_kill(instance="map-check")` when
+   cleanup is appropriate. Preserve user sessions and report any left running.
 
 ## Multiplayer (several instances)
 
@@ -61,10 +70,9 @@ Use this skill whenever a task involves running or debugging a Warcraft III map
   and after), retry with `mode="foreground"`. Reforged builds using raw input
   often need this. Foreground input restores the previous focus afterwards.
 - Set `WC3_INPUT_MODE=foreground` to change the default for a session.
-- On classic WC3 the click result says `"virtual_cursor": true`: the game's
-  cursor was moved virtually and the click landed at your coordinates. Menus,
-  dropdowns (click the arrow, then the item) and double-clicks all work in
-  background mode. Take a screenshot after opening a dropdown to read its items.
+- On classic WC3 `"virtual_cursor": true` reports use of the virtual cursor
+  path; verify the intended UI effect with a fresh observation. For dropdowns,
+  click the arrow, inspect the opened items, then select the intended item.
 - Chat/cheats: `wc3_chat("iseedeadpeople")`. Single-player only cheats:
   `greedisgood 10000`, `whosyourdaddy`, `warpten`, `iseedeadpeople`,
   `thereisnospoon`, `strengthandhonor`. Map debug commands are usually chat
@@ -120,11 +128,15 @@ click the command card buttons if the map uses custom abilities.
 
 ## Practical tips
 
-- Launch only once per test; `wc3_launch` replaces the current session. Use
-  `wc3_kill()` between runs to avoid stale windows.
+- Launch once per fixture and use an explicit, unused instance ID. Before
+  restarting, verify the instance/PID and ownership; do not replace another
+  chat's session or use an unqualified kill for cleanup.
 - `wc3_wait(until="exit")` is the clean way to detect that the map quit or
   crashed after an action.
 - Screenshots use `printwindow` first (works covered). If they are black, try
   `method="screen"` with the window visible, or install `windows-capture`.
-- Prefer several small actions with screenshots over one long scripted sequence:
-  you cannot see intermediate state otherwise.
+- Use fresh screenshots for ordinary navigation. For timing-sensitive tests,
+  prepare the supported action sequence and event/capture evidence in advance;
+  occasional screenshots cannot establish a short transition. Stop on unknown
+  state, and do not improvise blind retries or infer gameplay from an input
+  acknowledgement. If frames look stale, verify freshness before further input.

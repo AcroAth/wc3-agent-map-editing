@@ -1,3 +1,20 @@
-{"name":"wc3-tester","interface":{"displayName":"WC3 Tester"},
- "plugins":[{"name":"wc3-tester","source":{"source":"local","path":"./"},
-   "policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}
+{
+  "name": "wc3-tester",
+  "interface": {
+    "displayName": "Agent Map Editing for Warcraft III"
+  },
+  "plugins": [
+    {
+      "name": "wc3-tester",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

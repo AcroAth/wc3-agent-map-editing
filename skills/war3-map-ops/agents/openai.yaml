@@ -1,0 +1,4 @@
+interface:
+  display_name: "War3 Map Ops"
+  short_description: "Operate on any Warcraft III custom map"
+  default_prompt: "Use $war3-map-ops on a Warcraft III custom map within a project folder."

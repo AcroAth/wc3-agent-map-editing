@@ -1,7 +1,7 @@
 {
   "name": "wc3-tester",
-  "version": "0.1.0",
-  "description": "Drive Warcraft III in the background for automated map testing: window control, input, screenshots, lifecycle and crash analysis.",
+  "version": "0.2.0",
+  "description": "Edit, rebuild, validate and test Warcraft III custom maps with reusable agent skills and WC3 Tester game-control tools.",
   "author": {
     "name": "AcroAth",
     "url": "https://github.com/AcroAth"
@@ -15,14 +15,18 @@
     "mcp",
     "game-testing",
     "automation",
-    "crash-analysis"
+    "crash-analysis",
+    "map-editing",
+    "skills",
+    "jass",
+    "mpq"
   ],
   "mcpServers": "./.mcp.json",
   "skills": "./skills/",
   "interface": {
-    "displayName": "WC3 Tester",
-    "shortDescription": "Automated Warcraft III map testing from an agent.",
-    "longDescription": "wc3-tester is an MCP server that launches, attaches to, observes and drives Warcraft III (classic 1.26-1.31 and Reforged 1.32+) while it runs in the background. It provides background window messages and foreground input, screenshots that work on covered windows, and lifecycle/crash reporting including WC3 error logs, WER reports and minidumps.",
+    "displayName": "Agent Map Editing for Warcraft III",
+    "shortDescription": "Edit and test Warcraft III maps with an agent.",
+    "longDescription": "Agent Map Editing for Warcraft III bundles Warcraft III map editing, rebuilding and validation workflows with reproducible native testing and the WC3 Tester MCP server for game control, screenshots and crash diagnostics. Editing uses project-provided archive and build tools; native testing requires Windows and a compatible installed Warcraft III client.",
     "developerName": "AcroAth",
     "websiteURL": "https://github.com/AcroAth/wc3-tester",
     "category": "Engineering",
@@ -32,7 +36,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Launch my map and check it loads without crashing"
+      "Inspect my Warcraft III map project and identify its build workflow",
+      "Fix my map and verify the affected behavior in Warcraft III"
     ]
   }
 }

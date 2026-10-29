@@ -1,9 +1,44 @@
-# wc3-tester
+# Agent Map Editing for Warcraft III
 
-A Codex plugin with an MCP (stdio) server that lets an agent control
-**Warcraft III** for automated map testing: classic 1.26–1.31 (`war3.exe`) and
-Reforged 1.32+ (`Warcraft III.exe` under `_retail_\x86_64\`). The game can run
-in the background, unfocused and covered by other windows.
+A skill pack and Codex plugin for editing, rebuilding, validating and testing
+**Warcraft III** custom maps. The existing `wc3-tester` repository, plugin ID
+and MCP server name are retained; the public display name is Agent Map Editing for Warcraft III.
+
+## Included workflows
+
+| Skill | Responsibility |
+| --- | --- |
+| [war3-map-ops](skills/war3-map-ops/SKILL.md) | Discover map sources/tools, edit payloads, preserve recoverable versions, rebuild, compact and validate |
+| [war3-test-ops](skills/war3-test-ops/SKILL.md) | Prepare proportionate cases, verify the selected machine/artifact and judge native gameplay evidence |
+| [wc3-map-testing](skills/wc3-map-testing/SKILL.md) | Operate WC3 Tester game-control, screenshot and crash-diagnostic tools |
+
+Editing requires the map project's compatible MPQ/archive tools and build
+scripts, plus a compiler and native definitions where applicable. These tools
+and Warcraft III itself are not bundled. The map workflow supports `.w3x` and
+`.w3m`; discover the target client rather than assuming a version.
+
+Native testing requires Windows, a compatible installed Warcraft III client
+and supported control access on the selected host or VM. The WC3 Tester server
+targets classic 1.26–1.31 (`war3.exe`) and Reforged 1.32+
+(`Warcraft III.exe` under `_retail_\x86_64\`); see Limitations for verified
+coverage. The game can run in the background where the client supports it.
+
+The public workflows require no particular agent model or delegation feature.
+Explicit user/project rules still apply. Test reports distinguish static checks,
+instrumented trials and observations of the exact release artifact.
+
+## Use just the skills
+
+For a skills-only installation, copy the desired folders from `skills/` into
+your agent's supported skill directory, retaining their relative layout and
+all `references/` and `agents/` files. Install both operations skills together
+for the complete editing-to-testing workflow. `wc3-map-testing` documents the
+bundled server; the test workflow can also use another supported native-control
+integration. Copying skills alone does not install the server or build tools.
+
+For Codex, a user skill directory is `~/.codex/skills/`. Avoid keeping a local
+and plugin copy of the same skill active together; keep personal preferences
+such as a required testing model in your own applicable instructions.
 
 ## Install
 
