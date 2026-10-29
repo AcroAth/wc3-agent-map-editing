@@ -9,6 +9,7 @@ is intentionally kept in memory.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import subprocess
@@ -73,6 +74,7 @@ class Session:
 
 _instances: dict[str, Session] = {}
 _current: str | None = None
+_launching = 0  # launches in progress, see busy_count()
 
 # Session states that mean "no live process anymore".
 _DEAD_STATES = {"exited", "crashed", "not_started"}
@@ -207,6 +209,38 @@ def list_instances() -> list[dict]:
             }
         )
     return result
+
+
+def busy_count() -> int:
+    """Live instances plus launches in progress, for the shared server.
+
+    Uses only process handles (no window messages), so it is fast and cannot
+    block on a busy or hung game.
+    """
+    alive = 0
+    for session in list(_instances.values()):
+        if session.proc_handle:
+            alive += _handle_exit_code(session.proc_handle) is None
+        elif session.pid:
+            alive += bool(_process_info(session.pid)[0])
+    return alive + _launching
+
+
+def _counted_launch(fn):
+    """Count *fn* in busy_count() while it runs: a launch registers its
+    instance only at the end, and the shared server must not be replaced
+    in between."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _launching
+        _launching += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _launching -= 1
+
+    return wrapper
 
 
 def select(instance: str) -> dict:
@@ -443,6 +477,7 @@ def _terminate_tree(
     return killed, errors
 
 
+@_counted_launch
 def launch(
     exe: str | None = None,
     map_path: str | None = None,
@@ -879,7 +914,14 @@ def status(instance: str | None = None) -> dict:
 
     fatal_dialog = None
     try:
-        fatal_dialog = crash.find_fatal_dialog(pid)
+        fatal_dialog = crash.find_fatal_dialog(
+            pid,
+            # Never another registered instance's window.
+            exclude_pids={int(s.pid) for n, s in _instances.items() if s.pid and n != session.instance},
+            # Another process's dialog (a crash reporter) only once the game is
+            # gone, and only from a process started after this game.
+            foreign_since=None if running else (create_time or session.start_time.timestamp()),
+        )
     except Exception as exc:
         log.debug("fatal dialog lookup failed: %s", exc)
 

@@ -53,6 +53,17 @@ codex plugin add wc3-tester@wc3-tester
 To work on a local clone instead, pass its folder:
 `codex plugin marketplace add C:\path\to\wc3-agent-map-editing`.
 
+Installed earlier from `AcroAth/wc3-tester`? Updates keep working, because
+GitHub redirects the old address. Adding the new address on top of it fails
+with "marketplace 'wc3-tester' is already added from a different source". To
+switch, remove the marketplace first; the plugin keeps its ID
+(`wc3-tester@wc3-tester`):
+
+```bat
+codex plugin marketplace remove wc3-tester
+codex plugin marketplace add AcroAth/wc3-agent-map-editing
+```
+
 Start a new Codex chat after installing or updating. A running chat keeps the
 server it started with.
 
@@ -196,7 +207,8 @@ the same LAN relay.
 - "Current instance" is shared too, so with several chats pass `instance`
   explicitly.
 - After a plugin update, the old server is replaced on the next call if no
-  game is running; otherwise it keeps serving its games until they end.
+  game is running or starting; otherwise it keeps serving its games until
+  they end. A chat still on the older version then uses the newer server.
 - It exits after `WC3_DAEMON_IDLE_MIN` minutes (default 30) without calls and
   without running games; the next call starts a new one.
 - `WC3_SHARED_SERVER=0` gives each chat its own private server again. The
@@ -226,6 +238,7 @@ set PYTHONPATH=src
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_registry.py
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_bindhook.py
 %LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\shared_server_test.py
+%LOCALAPPDATA%\wc3-tester\venv\Scripts\python tests\test_env_vars.py
 ```
 
 `shared_server_test.py` runs two chats (stdio proxies) against one shared

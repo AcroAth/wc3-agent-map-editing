@@ -280,11 +280,13 @@ def import_slots(
     path: str,
     funcs: tuple[str, ...] = FUNCS,
     ordinal_maps: dict[str, dict[int, str]] | None = None,
+    dlls: tuple[str, ...] = IMPORT_DLLS,
 ) -> dict[str, list[int]]:
-    """IAT RVAs of ws2_32/wsock32 imports in one module file (empty on error)."""
+    """IAT RVAs of *funcs* imported from *dlls* (default: ws2_32/wsock32) in
+    one module file (empty on error)."""
     try:
         data = Path(path).read_bytes()
-        return _PE(data).import_slots(IMPORT_DLLS, funcs, ordinal_maps)
+        return _PE(data).import_slots(dlls, funcs, ordinal_maps)
     except Exception:
         return {f: [] for f in funcs}
 

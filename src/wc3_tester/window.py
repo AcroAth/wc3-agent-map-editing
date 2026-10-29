@@ -25,32 +25,27 @@ EXCLUDED_PROCESS_NAMES = {
 }
 DEFAULT_CLASS = "Warcraft III"
 
-_process_name_cache: dict[int, str] = {}
-
 
 def process_name_of(pid: int) -> str:
-    """Best-effort process executable name (lower-case, e.g. ``war3.exe``)."""
+    """Best-effort process executable name (lower-case, e.g. ``war3.exe``).
+
+    Not cached by PID: Windows reuses PIDs, and the shared server runs for
+    hours.
+    """
     if not pid:
         return ""
-    cached = _process_name_cache.get(pid)
-    if cached is not None:
-        return cached
-    name = ""
     try:
         import psutil
 
-        proc = psutil.Process(pid)
-        name = (proc.name() or "").lower()
+        return (psutil.Process(pid).name() or "").lower()
     except Exception:
-        name = ""
-    if name:
-        _process_name_cache[pid] = name
-    return name
+        return ""
 
 
 def window_title(hwnd: int) -> str:
-    # SendMessageTimeout keeps us safe if the game is hung.
-    return w.get_window_text_timeout(hwnd, 750)
+    # For another process's window GetWindowText returns the stored caption
+    # without sending it a message, so a busy or hung game cannot stall us.
+    return w.get_window_text(hwnd)
 
 
 def window_class(hwnd: int) -> str:

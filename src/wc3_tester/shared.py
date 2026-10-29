@@ -10,8 +10,9 @@ makes sure one background *daemon* is running and forwards ``tools/list`` and
   random bearer token, code hash).  Requests without the token get 401.
 * Tools run in worker threads, so a long ``wc3_wait`` in one chat does not
   stall the others; lifecycle tools (launch/attach/kill/...) are serialized.
-* A daemon running older plugin code is replaced when it has no running game;
-  otherwise it keeps serving until its games are gone.
+* A daemon running older plugin code is replaced when it has no running game
+  or launch; otherwise it keeps serving until its games are gone.  A chat
+  still on an older plugin version uses a newer daemon instead of replacing it.
 * The daemon exits after ``WC3_DAEMON_IDLE_MIN`` minutes (default 30) without
   requests and without running games; the next call starts a new one.
 * ``WC3_SHARED_SERVER=0`` turns sharing off (one in-process server per chat).
@@ -27,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -40,6 +42,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 PKG_DIR = Path(__file__).resolve().parent
+PLUGIN_JSON = PKG_DIR.parents[1] / ".codex-plugin" / "plugin.json"
 SERIAL_TOOLS = {
     "wc3_launch", "wc3_launch_lan", "wc3_attach", "wc3_kill", "wc3_select",
     "wc3_set_launch_wrapper",
@@ -66,13 +69,34 @@ def code_hash() -> str:
     return h.hexdigest()[:16]
 
 
-def _pid_alive(pid: int) -> bool:
+def plugin_version() -> str | None:
+    """The plugin version this code ships with (``.codex-plugin/plugin.json``)."""
+    try:
+        return str(json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))["version"])
+    except Exception:
+        return None
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", version))
+
+
+def _daemon_proc(state: dict | None):
+    """The live daemon process that *state* names, or None.
+
+    Windows reuses PIDs: when the daemon died without removing daemon.json
+    (shutdown, crash), its PID may now belong to an unrelated process, which
+    was necessarily created after the daemon recorded ``started``.
+    """
     try:
         import psutil
 
-        return psutil.pid_exists(int(pid)) and psutil.Process(int(pid)).is_running()
+        proc = psutil.Process(int(state["pid"]))
+        if proc.create_time() > float(state["started"]) + 2:
+            return None
+        return proc
     except Exception:
-        return False
+        return None
 
 
 def _read_state() -> dict | None:
@@ -103,7 +127,9 @@ def _running_instances() -> int:
     from . import game
 
     try:
-        return sum(1 for item in game.list_instances() if item.get("state") in ("running", "hung"))
+        # Not list_instances(): its full status() sends window messages to
+        # every window and can take seconds, and /health runs on the event loop.
+        return game.busy_count()
     except Exception:
         return 0
 
@@ -143,6 +169,7 @@ def run_daemon(mcp) -> None:
     logging.getLogger("mcp").setLevel(logging.WARNING)  # one line per request otherwise
     token = secrets.token_urlsafe(24)
     my_code = code_hash()
+    my_version = plugin_version()
     started = time.time()
     last_request = [time.time()]
     idle_sec = float(os.environ.get("WC3_DAEMON_IDLE_MIN", "30")) * 60
@@ -160,7 +187,7 @@ def run_daemon(mcp) -> None:
 
     async def health(_request):
         return JSONResponse({
-            "pid": os.getpid(), "code": my_code, "started": started,
+            "pid": os.getpid(), "code": my_code, "version": my_version, "started": started,
             "running_instances": _running_instances(),
         })
 
@@ -259,27 +286,43 @@ def _spawn_daemon() -> None:
     launcher._wmi_create(subprocess.list2cmdline([sys.executable, "-c", code, "--daemon"]), str(state_dir()))
 
 
+def _keep(h: dict) -> bool:
+    """Use the daemon that answered *h* rather than replace it?"""
+    if h.get("running_instances"):
+        return True  # it serves games or a launch in progress: never interrupt them
+    if not any(PKG_DIR.glob("*.py")):
+        return True  # an update removed this chat's copy of the plugin
+    mine, theirs = plugin_version(), h.get("version")
+    if mine and theirs and _version_key(mine) != _version_key(theirs):
+        # Only older code is replaced; a chat still on an older version uses
+        # the newer daemon instead of taking turns killing it.
+        return _version_key(theirs) > _version_key(mine)
+    return h.get("code") == code_hash()
+
+
 def ensure_daemon() -> dict:
-    """Return the state of a healthy daemon running this code (starting one if needed)."""
+    """Return the state of a healthy daemon to use (starting one if needed)."""
     st = _read_state()
-    if st and _pid_alive(st.get("pid", 0)):
+    if _daemon_proc(st):
         h = _health(st)
-        if h and (h.get("code") == code_hash() or h.get("running_instances")):
+        if h and _keep(h):
             return st
     with _start_lock():
         st = _read_state()
-        if st and _pid_alive(st.get("pid", 0)):
-            h = _health(st)
-            if h and h.get("code") == code_hash():
+        proc = _daemon_proc(st)
+        if proc:
+            # A daemon that missed the short probe may only be busy.
+            h = _health(st, timeout=6.0)
+            if h and _keep(h):
+                if h.get("code") != code_hash():
+                    log.warning("shared server runs other plugin code but is busy or newer; using it")
                 return st
-            if h and h.get("running_instances"):
-                log.warning("shared server runs older code but has running games; using it")
-                return st
-            # Outdated and idle, or unresponsive: replace it.
+            # Outdated and idle, or unresponsive: replace it.  psutil refuses
+            # to kill if the PID was reused after _daemon_proc checked it.
             with contextlib.suppress(Exception):
-                import psutil
-
-                psutil.Process(st["pid"]).kill()
+                proc.kill()
+        if not any(PKG_DIR.glob("*.py")):
+            raise RuntimeError("an update removed this chat's copy of the plugin; start a new chat")
         with contextlib.suppress(OSError):
             state_file().unlink()
         _spawn_daemon()

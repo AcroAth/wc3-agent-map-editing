@@ -419,6 +419,8 @@ def wc3_crash_report(
 ) -> dict:
     """Crash report: exit code, fatal dialog, WC3 error files, WER, event log.
 
+    ``since_iso``: ISO 8601 time to report from (default: the instance's
+    start); without a UTC offset it is local time.
     ``instance``: Which game instance (e.g. "p2"); default = the current one,
     i.e. the last launched/attached/selected.
     """
@@ -478,7 +480,6 @@ def wc3_read_logs(
             else time.time() - 24 * 3600
         )
         dirs = crash.error_dirs(exe)
-        candidates: list[Path] = []
 
         def _mtime(path: Path) -> float:
             try:
@@ -486,21 +487,14 @@ def wc3_read_logs(
             except Exception:
                 return 0.0
 
-        for directory in dirs:
-            base = Path(directory)
-            if not base.is_dir():
-                continue
-            try:
-                for path in base.rglob("*"):
-                    if (
-                        path.is_file()
-                        and path.suffix.lower() in (".txt", ".log", ".mdmp")
-                        and _mtime(path) >= since_ts - 2
-                    ):
-                        candidates.append(path)
-            except Exception:
-                continue
-        candidates.sort(key=_mtime, reverse=True)
+        # Errors and Logs are inside the "Warcraft III" folder, which is
+        # scanned too; _scan_new_files drops duplicates, sorts newest first
+        # and caps the walk.
+        candidates = [
+            Path(item["path"])
+            for item in crash._scan_new_files(dirs, since_ts, limit=10_000)
+            if Path(item["path"]).suffix.lower() in (".txt", ".log", ".mdmp")
+        ]
         files: list[dict] = []
         for path in candidates[:max_files]:
             try:

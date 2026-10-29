@@ -27,7 +27,7 @@ LAN_PORT = 6112
 W3GS = 0xF7
 SEARCHGAME, GAMEINFO = 0x2F, 0x30
 PRODUCTS = (b"PX3W", b"3RAW")  # TFT, RoC (reversed four-cc, as on the wire)
-DEFAULT_VERSIONS = tuple(range(24, 32))  # 1.24 .. 1.31; narrowed once a host answers
+DEFAULT_VERSIONS = tuple(range(24, 32))  # 1.24 .. 1.31
 
 
 def searchgame_packet(product: bytes, version: int) -> bytes:
@@ -107,7 +107,10 @@ class Relay:
             self.games.clear()
 
     def _search_packets(self) -> list[bytes]:
-        versions = (self.version,) if self.version else DEFAULT_VERSIONS
+        # Keep searching every version, the last one heard first: a host
+        # ignores searches for other versions, and a later test in the same
+        # server may use a different client.
+        versions = dict.fromkeys([v for v in (self.version,) if v] + list(DEFAULT_VERSIONS))
         return [searchgame_packet(p, v) for p in PRODUCTS for v in versions]
 
     def _run(self) -> None:
