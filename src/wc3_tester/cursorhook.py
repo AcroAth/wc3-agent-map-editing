@@ -9,6 +9,12 @@ while enabled, returns a position we write into the game's memory:
 
     block = [magic "WC3V"][enabled][x][y][original GetCursorPos][stub code]
 
+In a match the game also confines (ClipCursor) and warps (SetCursorPos) the
+real cursor, even from the background.  Those imports are redirected too:
+while the game is not the foreground window, ClipCursor becomes
+ClipCursor(NULL) and SetCursorPos does nothing; in the foreground both pass
+through unchanged.  Their data and stubs live at ``block + GUARD``.
+
 The slots of every module loaded from the game's folder are redirected: the
 exe on 1.28+, and on 1.26/1.27 also Game.dll, which holds the engine.  Only
 import slots change (no code is patched), the change is reverted with
@@ -35,6 +41,12 @@ PAGE_EXECUTE_READWRITE = 0x40
 PAGE_READWRITE = 0x04
 MAGIC = b"WC3V"
 HEADER = 20  # magic + enabled + x + y + original
+# Guard area: [game pid][&GetForegroundWindow][&GetWindowThreadProcessId]
+# [original ClipCursor][original SetCursorPos], then the two stubs.
+GUARD = 0x100
+CLIP_STUB = GUARD + 0x20
+SETPOS_STUB = GUARD + 0x60
+GUARDED = ("ClipCursor", "SetCursorPos")
 IMAGE_FILE_MACHINE_I386 = 0x014C
 RETRY_SEC = 2.0
 
@@ -74,13 +86,53 @@ def _stub(block: int) -> bytes:
     )
 
 
-def _cursor_slots(pid: int, exe_path: str) -> list[int]:
-    """Addresses of the USER32!GetCursorPos import slots of every 32-bit
+def _is_foreground(guard: int) -> bytes:
+    """x86: ZF set when the foreground window belongs to the game's pid.
+    Clobbers eax/ecx/edx only, as any stdcall callee may."""
+    return (
+        b"\xFF\x15" + struct.pack("<I", guard + 4)    # call [GetForegroundWindow]
+        + b"\x6A\x00"                                 # push 0        ; pid out
+        + b"\x54"                                     # push esp      ; &pid
+        + b"\x50"                                     # push eax      ; hwnd
+        + b"\xFF\x15" + struct.pack("<I", guard + 8)  # call [GetWindowThreadProcessId]
+        + b"\x58"                                     # pop eax       ; pid
+        + b"\x3B\x05" + struct.pack("<I", guard)      # cmp eax, [game pid]
+    )
+
+
+def _clip_stub(block: int) -> bytes:
+    """BOOL ClipCursor(const RECT*): foreground -> original; else ClipCursor(NULL)."""
+    guard = block + GUARD
+    orig = struct.pack("<I", guard + 12)
+    return (
+        _is_foreground(guard)
+        + b"\x75\x06"              # jne background
+        + b"\xFF\x25" + orig       # jmp [original]
+        + b"\x6A\x00"              # background: push 0
+        + b"\xFF\x15" + orig       # call [original]   ; release any confinement
+        + b"\xC2\x04\x00"          # ret 4
+    )
+
+
+def _setpos_stub(block: int) -> bytes:
+    """BOOL SetCursorPos(int, int): foreground -> original; else a no-op."""
+    guard = block + GUARD
+    return (
+        _is_foreground(guard)
+        + b"\x75\x06"                                   # jne background
+        + b"\xFF\x25" + struct.pack("<I", guard + 16)   # jmp [original]
+        + b"\xB8\x01\x00\x00\x00"                       # background: mov eax, 1
+        + b"\xC2\x08\x00"                               # ret 8
+    )
+
+
+def _user32_slots(pid: int, exe_path: str, funcs: tuple[str, ...]) -> dict[str, list[int]]:
+    """Addresses of the USER32 import slots for *funcs* in every 32-bit
     module loaded from the game's folder."""
     from . import bindhook
 
     game_dir = os.path.normcase(os.path.dirname(os.path.abspath(exe_path)))
-    slots: list[int] = []
+    slots: dict[str, list[int]] = {f: [] for f in funcs}
     for module in bindhook.list_modules(pid):
         path = module.get("path") or ""
         base = int(module.get("base") or 0)
@@ -88,9 +140,22 @@ def _cursor_slots(pid: int, exe_path: str) -> list[int]:
             continue
         if bindhook.pe_machine(path) != IMAGE_FILE_MACHINE_I386:
             continue
-        rvas = bindhook.import_slots(path, ("GetCursorPos",), dlls=("user32.dll",))["GetCursorPos"]
-        slots.extend(base + rva for rva in rvas)
+        for func, rvas in bindhook.import_slots(path, funcs, dlls=("user32.dll",)).items():
+            slots[func].extend(base + rva for rva in rvas)
     return slots
+
+
+def _user32_exports(pid: int, funcs: tuple[str, ...]) -> dict[str, int]:
+    """Addresses of USER32 exports inside the (32-bit) game process."""
+    from . import bindhook
+
+    for module in bindhook.list_modules(pid):
+        if (module.get("name") or "").lower() == "user32.dll" and module.get("path"):
+            base = int(module.get("base") or 0)
+            rvas = bindhook.export_rvas(module["path"], funcs)
+            if base and all(rvas.values()):
+                return {f: base + int(rvas[f]) for f in funcs}
+    raise Unsupported("USER32 exports not found in the game process")
 
 
 class VirtualCursor:
@@ -104,6 +169,7 @@ class VirtualCursor:
             raise Unsupported(f"OpenProcess failed ({ctypes.get_last_error()}); is the game elevated?")
         self.block: int | None = None
         self.slots: list[int] = []
+        self.guard_slots: dict[str, list[int]] = {}
 
     def close(self) -> None:
         if self.handle:
@@ -139,7 +205,8 @@ class VirtualCursor:
 
     # -- public ---------------------------------------------------------
     def install(self) -> None:
-        slots = _cursor_slots(self.pid, self.exe_path)
+        found = _user32_slots(self.pid, self.exe_path, ("GetCursorPos",) + GUARDED)
+        slots = found["GetCursorPos"]
         if not slots:
             raise Unsupported("no 32-bit game module imports GetCursorPos (x64 build?)")
         values = [struct.unpack("<I", self._read(slot, 4))[0] for slot in slots]
@@ -155,6 +222,32 @@ class VirtualCursor:
             if value != block + HEADER:
                 self._write_slot(slot, block + HEADER)
         log.info("virtual cursor installed in pid %s (%s slot(s))", self.pid, len(slots))
+        try:
+            self._install_guard(found)
+        except Exception as exc:
+            log.warning("cursor guard not installed in pid %s: %s", self.pid, exc)
+
+    def _install_guard(self, found: dict[str, list[int]]) -> None:
+        """Keep a background game from confining or moving the real cursor."""
+        addr = _user32_exports(self.pid, ("GetForegroundWindow", "GetWindowThreadProcessId") + GUARDED)
+        if any(a >= 1 << 32 for a in addr.values()):
+            raise Unsupported("USER32 is not mapped below 4 GB (not a 32-bit process?)")
+        block = self.block
+        # Data and stubs first, then the slots: a slot must never point at
+        # half-written code.
+        self._write(block + GUARD, struct.pack(
+            "<5I", self.pid, addr["GetForegroundWindow"], addr["GetWindowThreadProcessId"],
+            addr["ClipCursor"], addr["SetCursorPos"]))
+        self._write(block + CLIP_STUB, _clip_stub(block))
+        self._write(block + SETPOS_STUB, _setpos_stub(block))
+        stubs = {"ClipCursor": block + CLIP_STUB, "SetCursorPos": block + SETPOS_STUB}
+        for func in GUARDED:
+            for slot in found[func]:
+                if struct.unpack("<I", self._read(slot, 4))[0] != stubs[func]:
+                    self._write_slot(slot, stubs[func])
+        self.guard_slots = {f: found[f] for f in GUARDED}
+        log.info("cursor guard installed in pid %s (%s)", self.pid,
+                 ", ".join(f"{f}: {len(found[f])} slot(s)" for f in GUARDED))
 
     def set(self, screen_x: int, screen_y: int) -> None:
         self._write(self.block + 4, struct.pack("<Iii", 1, int(screen_x), int(screen_y)))
@@ -169,6 +262,10 @@ class VirtualCursor:
             orig = struct.unpack("<I", self._read(self.block + 16, 4))[0]
             for slot in self.slots:
                 self._write_slot(slot, orig)
+            for index, func in enumerate(GUARDED):
+                orig = struct.unpack("<I", self._read(self.block + GUARD + 12 + 4 * index, 4))[0]
+                for slot in self.guard_slots.get(func, []):
+                    self._write_slot(slot, orig)
             self.release()
 
 

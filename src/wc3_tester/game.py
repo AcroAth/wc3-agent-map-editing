@@ -671,6 +671,7 @@ def launch(
     )
     set_session(session)
     log.info("Launched instance %s pid=%s hwnd=%s", target_instance, pid, hwnd)
+    guard = _install_cursor_guard(pid)
     return {
         "instance": target_instance,
         "pid": pid,
@@ -689,9 +690,25 @@ def launch(
         "player_name": player_name,
         "lan_binding": lan_binding,
         "bind_hook": bind_info,
+        "cursor_guard": guard,
         "placement": placement,
         "lan": lan,
     }
+
+
+def _install_cursor_guard(pid: int) -> bool:
+    """Install the virtual cursor now (classic x86 only) so that a background
+    game cannot confine or move the real cursor before the first click."""
+    from . import cursorhook
+
+    deadline = time.time() + 5
+    while True:
+        vc = cursorhook.for_pid(pid)
+        if vc is not None:
+            return bool(vc.guard_slots)
+        if pid in cursorhook._cache or time.time() >= deadline:
+            return False  # unsupported (x64, disabled) or still failing
+        time.sleep(cursorhook.RETRY_SEC)
 
 
 def launch_lan(
@@ -810,6 +827,7 @@ def attach(
         "exe": exe_path,
         "out_dir": str(out),
         "window": window.describe(hwnd),
+        "cursor_guard": _install_cursor_guard(actual_pid),
     }
 
 

@@ -162,6 +162,10 @@ def run_daemon(mcp) -> None:
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
+    # Under pythonw.exe there is no stdout/stderr; uvicorn and logging expect them.
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     logging.basicConfig(
         filename=str(state_dir() / "daemon.log"), level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,
@@ -281,9 +285,15 @@ def _spawn_daemon() -> None:
             "from wc3_tester.server import main; main()")
     from . import launcher
 
+    # pythonw.exe: a console python.exe started through WMI gets a new console
+    # window, which Windows Terminal opens in the foreground.
+    exe = Path(sys.executable)
+    windowless = exe.with_name("pythonw.exe")
+    if windowless.is_file():
+        exe = windowless
     # Working folder outside the plugin cache: a process whose current
     # directory is inside the cache blocks Codex from replacing the plugin.
-    launcher._wmi_create(subprocess.list2cmdline([sys.executable, "-c", code, "--daemon"]), str(state_dir()))
+    launcher._wmi_create(subprocess.list2cmdline([str(exe), "-c", code, "--daemon"]), str(state_dir()))
 
 
 def _keep(h: dict) -> bool:
