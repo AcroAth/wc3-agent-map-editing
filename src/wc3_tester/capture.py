@@ -13,6 +13,7 @@ The returned PIL image is downscaled so that its width is at most
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import logging
 import os
@@ -157,21 +158,24 @@ def _capture_printwindow(hwnd: int) -> tuple[Image.Image | None, dict]:
 # ---------------------------------------------------------------------------
 
 
-def _capture_wgc(hwnd: int) -> tuple[Image.Image | None, dict]:
+def _capture_wgc(hwnd: int, timeout_sec: float = 5.0) -> tuple[Image.Image | None, dict]:
     info: dict = {}
     try:
         from windows_capture import WindowsCapture  # type: ignore
     except Exception as exc:
         return None, {"error": f"windows_capture not importable: {exc}"}
 
-    title = window.window_title(hwnd)
-    if not title:
-        return None, {"error": "window has no title; wgc needs one"}
-
     frames: list[tuple[int, int, bytes]] = []
     try:
-        capture = WindowsCapture(cursor_capture=False, window_name=title)
-
+        # By handle: every instance is titled "Warcraft III", and window_name
+        # is a substring match that can hit other windows too.
+        capture = WindowsCapture(cursor_capture=False, window_hwnd=int(hwnd))
+    except TypeError:
+        return None, {"error": "this windows-capture cannot capture by window handle; "
+                               "update it: pip install -U windows-capture"}
+    except Exception as exc:
+        return None, {"error": f"wgc capture failed: {exc}"}
+    try:
         @capture.event
         def on_frame_arrived(frame, capture_control):  # pragma: no cover - Windows only
             try:
@@ -198,15 +202,23 @@ def _capture_wgc(hwnd: int) -> tuple[Image.Image | None, dict]:
         def on_closed():  # pragma: no cover - Windows only
             pass
 
-        capture.start()  # blocks until stop() is called above
+        # start() would block until a frame arrives, i.e. forever for a
+        # minimized window; wait on our own deadline instead.
+        control = capture.start_free_threaded()
+        deadline = time.time() + timeout_sec
+        while not frames and not control.is_finished() and time.time() < deadline:
+            time.sleep(0.02)
+        with contextlib.suppress(Exception):
+            control.stop()
     except Exception as exc:
         return None, {"error": f"wgc capture failed: {exc}"}
 
     if not frames:
-        return None, {"error": "wgc produced no frames"}
+        return None, {"error": f"wgc produced no frame within {timeout_sec:g}s"}
     width, height, buffer = frames[0]
     try:
-        image = Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRA", 0, 1).copy()
+        # WGC frames are BGRA; Pillow's raw mode for that into RGB is "BGRX".
+        image = Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRX", 0, 1).copy()
     except Exception as exc:
         return None, {"error": f"wgc frame conversion failed: {exc}"}
 

@@ -60,8 +60,8 @@ def _as_utc(value: datetime | str | None, default: datetime | None = None) -> da
             value = datetime.fromisoformat(text)
         except Exception:
             return default or (_now_utc() - timedelta(hours=24))
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+    # A value without an offset is local time: astimezone() treats naive
+    # datetimes as local.
     return value.astimezone(timezone.utc)
 
 
@@ -82,8 +82,31 @@ def _child_texts(hwnd: int) -> list[str]:
     return texts
 
 
-def find_fatal_dialog(pid: int | None = None) -> dict | None:
-    """Find a WC3 fatal-error dialog and return its text, or ``None``."""
+def _started_since(pid: int, since: float | None) -> bool:
+    if since is None:
+        return False
+    if since <= 0:
+        return True
+    try:
+        import psutil
+
+        return psutil.Process(pid).create_time() >= since - 1
+    except Exception:
+        return False
+
+
+def find_fatal_dialog(
+    pid: int | None = None,
+    exclude_pids: set[int] | frozenset[int] = frozenset(),
+    foreign_since: float | None = 0.0,
+) -> dict | None:
+    """Find a WC3 fatal-error dialog and return its text, or ``None``.
+
+    Windows of *pid* qualify first.  A dialog of another process (such as a
+    crash reporter) qualifies only if that process started at or after
+    ``foreign_since`` (None: never; 0: any time).  Windows of *exclude_pids*,
+    the other registered instances, never qualify.
+    """
     try:
         candidates = w.enum_windows()
     except Exception:
@@ -94,12 +117,17 @@ def find_fatal_dialog(pid: int | None = None) -> dict | None:
     for hwnd in candidates:
         try:
             wpid = w.window_pid(hwnd)
+            if wpid in exclude_pids:
+                continue
             cls = w.get_class_name(hwnd)
-            title = w.get_window_text_timeout(hwnd, timeout_ms=750)
-            title_l = title.lower()
             cls_l = cls.lower()
             is_dialog = cls_l == "#32770"
             same_pid = pid is not None and wpid == int(pid)
+            # Filter before reading any text, which costs a cross-process call.
+            if not same_pid and not (is_dialog and _started_since(wpid, foreign_since)):
+                continue
+            title = w.get_window_text(hwnd)  # the caption; never waits on another process
+            title_l = title.lower()
             # A #32770 dialog belonging to the game or explicitly naming
             # Warcraft/Fatal, or a window of the game whose own title says
             # Fatal/Error/Critical.  The ordinary "Warcraft III" main window

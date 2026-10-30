@@ -63,7 +63,9 @@ def main() -> int:
     time.sleep(1.2)
     st = relay.status()
     checks.append(("version learned", st["lan_version"] == VERSION, st["lan_version"]))
-    checks.append(("only learned version searched afterwards", searches[-2:] == [VERSION, VERSION], searches[-4:]))
+    expected = set(lanrelay.DEFAULT_VERSIONS)
+    checks.append(("every version still searched after one is learned",
+                   set(searches[-2 * len(expected):]) == expected, searches[-4:]))
     relay.remove(HOST)
     checks.append(("host removed", relay.ips() == [CLIENT], relay.ips()))
     relay.stop()

@@ -10,6 +10,7 @@
       "env_vars": [
         "WC3_EXE", "WC3_ERRORS_DIRS", "WC3_INPUT_MODE", "WC3_INPUT_DELAY_MS",
         "WC3_LAUNCH_WRAPPER", "WC3_SHARED_SERVER", "WC3_DAEMON_IDLE_MIN", "WC3_TESTER_OUT", "WC3_TESTER_VENV", "WC3_SYMPATH",
+        "WC3_VIRTUAL_CURSOR", "WC3_FRAME_MS",
         "USERPROFILE", "USERNAME", "LOCALAPPDATA", "APPDATA", "ProgramData",
         "TEMP", "TMP", "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "COMSPEC"
       ]

@@ -583,11 +583,11 @@ def get_window_text_timeout(hwnd: int, timeout_ms: int = 1000) -> str:
     length = 0
     result = ULONG_PTR(0)
     try:
-        length = int(
-            user32.SendMessageTimeoutW(
-                hwnd, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, timeout_ms, byref(result)
-            )
-        )
+        # The return value only says whether the call worked; the length is in result.
+        if user32.SendMessageTimeoutW(
+            hwnd, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, timeout_ms, byref(result)
+        ):
+            length = int(result.value)
     except Exception:
         length = 0
     size = max(256, min(int(length) + 1, 65536))

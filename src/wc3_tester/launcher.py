@@ -176,23 +176,41 @@ def release_single_instance() -> int:
                                         wt.DWORD, wt.BOOL, wt.DWORD]
         k32.CloseHandle.argtypes = [wt.HANDLE]
         ntdll.NtQueryObject.argtypes = [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.ULONG, ctypes.POINTER(wt.ULONG)]
-        size = 1 << 22
-        while True:
-            buf = ctypes.create_string_buffer(size)
-            status = ntdll.NtQuerySystemInformation(64, buf, size, None) & 0xFFFFFFFF  # SystemExtendedHandleInformation
-            if status != 0xC0000004:  # STATUS_INFO_LENGTH_MISMATCH
-                break
-            size *= 2
-        if status != 0:
+        k32.CreateEventW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.BOOL, wt.LPCWSTR]
+        k32.CreateEventW.restype = wt.HANDLE
+        # An event of our own, open while the handle table is read, shows which
+        # ObjectTypeIndex means "Event".  Only those handles are named below:
+        # asking for the name of a File handle (a synchronous pipe with a read
+        # pending, e.g. from an overlay) can block forever.
+        probe = k32.CreateEventW(None, True, False, None)
+        try:
+            size = 1 << 22
+            while True:
+                buf = ctypes.create_string_buffer(size)
+                status = ntdll.NtQuerySystemInformation(64, buf, size, None) & 0xFFFFFFFF  # SystemExtendedHandleInformation
+                if status != 0xC0000004:  # STATUS_INFO_LENGTH_MISMATCH
+                    break
+                size *= 2
+        finally:
+            if probe:
+                k32.CloseHandle(probe)
+        if status != 0 or not probe:
             return 0
         count = ctypes.c_size_t.from_buffer(buf).value
         entries = (_HandleEntry * count).from_buffer(buf, 2 * ctypes.sizeof(ctypes.c_size_t))
+        my_pid = os.getpid()
+        event_type = next(
+            (e.ObjectTypeIndex for e in entries if e.UniqueProcessId == my_pid and e.HandleValue == probe),
+            None,
+        )
+        if event_type is None:
+            return 0
         me = k32.GetCurrentProcess()
         closed = 0
         procs: dict[int, int] = {}
         for e in entries:
             pid = int(e.UniqueProcessId)
-            if pid not in pids:
+            if pid not in pids or e.ObjectTypeIndex != event_type:
                 continue
             if pid not in procs:
                 procs[pid] = k32.OpenProcess(0x0040, False, pid) or 0  # PROCESS_DUP_HANDLE
