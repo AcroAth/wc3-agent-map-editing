@@ -1,6 +1,6 @@
 {
   "name": "wc3-tester",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Edit, rebuild, validate and test Warcraft III custom maps with reusable agent skills and WC3 Tester game-control tools.",
   "author": {
     "name": "AcroAth",
